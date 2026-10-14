@@ -19,6 +19,7 @@ warnings.filterwarnings("ignore", message="Could not parse column")
 DATOS = Path(__file__).resolve().parent.parent / "data" / "processed"
 CRS_M = 25830          # sistema métrico de Madrid
 RADIO_BANCOS = 30      # metros alrededor de un tramo para contar bancos
+RADIO_GRUPO_BANCOS = 15  # bancos a menos de 2x15 m entre sí forman una misma zona de descanso
 UMBRAL_CUESTA = 4      # % a partir del cual un tramo cuenta como cuesta
 VELOCIDAD = 50         # metros por minuto (~3 km/h, paso tranquilo)
 DIST_MAX_RED = 200     # m: si un punto está más lejos de cualquier calle, está fuera de Chamberí
@@ -52,6 +53,37 @@ def _enumerar(items):
     return ", ".join(items[:-1]) + " y " + items[-1]
 
 
+def _texto(fila, col):
+    v = fila.get(col)
+    return str(v).strip() if isinstance(v, str) and v.strip() else ""
+
+
+def _titulo(s):
+    """'CALLE DE FUENCARRAL' -> 'Calle de Fuencarral'."""
+    s = s.title()
+    for p in ("De", "Del", "La", "Las", "Los", "El", "Y"):
+        s = s.replace(f" {p} ", f" {p.lower()} ")
+    return s
+
+
+def _nombre_lugar(fila, tipo):
+    """Nombre legible de un recurso según su capa de origen."""
+    if _texto(fila, "stop_name"):                       # paradas de metro y bus (GTFS)
+        return _texto(fila, "stop_name")
+    if tipo == "farmacia":                              # Comunidad de Madrid
+        via = " ".join(x for x in (_texto(fila, "DIRECCION_VIAL_TIPO"),
+                                   _texto(fila, "DIRECCION_VIAL_NOMBRE")) if x)
+        via = _titulo(via)
+        num = _texto(fila, "DIRECCION_VIAL_NRO")
+        return f"Farmacia en {via}, {num}" if num else (f"Farmacia en {via}" if via else None)
+    if tipo == "banco":                                 # Ayuntamiento de Madrid
+        via = " ".join(x for x in (_texto(fila, "TIPO_VIA"), _texto(fila, "NOM_VIA")) if x)
+        via = _titulo(via)
+        num = _texto(fila, "NUM_VIA")
+        return f"Banco en {via} {num}".strip() if via else None
+    return None
+
+
 # ---------------------------------------------------------------- motor
 class Motor:
     def __init__(self, carpeta=DATOS):
@@ -69,9 +101,22 @@ class Motor:
         bus["tipo"] = "bus"
         self.transporte = gpd.GeoDataFrame(pd.concat([metro, bus], ignore_index=True), crs=CRS_M)
 
+        self._agrupar_bancos()
         self._calcular_indicadores()
         self._construir_grafo()
         print(f"  -> {len(self.calles)} tramos y {self.G.number_of_nodes()} cruces listos.")
+
+    # ---------- zonas de descanso
+    def _agrupar_bancos(self):
+        """Agrupa bancos a menos de ~30 m entre sí en una única 'zona de descanso'
+        (una plaza con 20 bancos es un solo sitio donde sentarse, no 20)."""
+        union = unary_union(list(self.bancos.geometry.buffer(RADIO_GRUPO_BANCOS)))
+        geoms = list(union.geoms) if hasattr(union, "geoms") else [union]
+        zonas = gpd.GeoDataFrame(geometry=geoms, crs=CRS_M)
+        cruce = gpd.sjoin(self.bancos[["geometry"]], zonas, predicate="within")
+        zonas["n_bancos"] = cruce["index_right"].value_counts().reindex(zonas.index, fill_value=0)
+        zonas["geometry"] = zonas.centroid
+        self.zonas_descanso = zonas
 
     # ---------- indicadores por tramo
     def _calcular_indicadores(self):
@@ -147,11 +192,27 @@ class Motor:
         t = self.calles.loc[idxs]
         longitud = float(t["length"].sum())
         trazado = unary_union(list(t.geometry))
-        bancos = int(self.bancos.within(trazado.buffer(RADIO_BANCOS)).sum())
-        calles = (
-            t.dropna(subset=["nombre"]).groupby("nombre")["length"].sum()
-            .sort_values(ascending=False).head(3).index.tolist()
-        )
+        zona_ruta = trazado.buffer(RADIO_BANCOS)
+        bancos = int(self.bancos.within(zona_ruta).sum())
+        zonas = int(self.zonas_descanso.within(zona_ruta).sum())
+
+        # Distancia máxima que hay que andar seguida sin ningún banco cerca
+        hueco = max_sin_banco = 0.0
+        for largo, n in zip(t["length"], t["bancos"]):
+            if n == 0:
+                hueco += largo
+                max_sin_banco = max(max_sin_banco, hueco)
+            else:
+                hueco = 0.0
+
+        # Las 3 calles principales, en el orden en que se recorren
+        largos = t.dropna(subset=["nombre"]).groupby("nombre")["length"].sum()
+        top = set(largos.sort_values(ascending=False).head(3).index)
+        calles = []
+        for n in t["nombre"]:
+            if n in top and n not in calles:
+                calles.append(n)
+
         lineas = [[(y, x) for x, y in g.coords] for g in t.to_crs(4326).geometry]
         return {
             "longitud_m": round(longitud),
@@ -160,7 +221,9 @@ class Motor:
             "pendiente_max": round(float(t["pendiente_pct"].max()), 1) if len(t) else 0.0,
             "escaleras": int(t["escalera"].sum()),
             "bancos": bancos,
-            "metros_por_banco": round(longitud / bancos) if bancos else None,
+            "zonas_descanso": zonas,
+            "metros_por_zona": round(longitud / zonas) if zonas else None,
+            "max_sin_banco_m": round(max_sin_banco),
             "dist_max_transporte_m": round(float(t["dist_transporte"].max())) if len(t) else 0,
             "calles": calles,
             "coordenadas": lineas,  # para pintar la ruta en el mapa del frontend
@@ -172,17 +235,21 @@ class Motor:
             desc += ", por " + _enumerar(reco["calles"])
         desc += "."
 
+        pesos = perfil.pesos()
         if misma:
             texto = f"{perfil.nombre}, el camino más directo ya te viene bien. {desc}"
         else:
+            # Solo mencionamos motivos relacionados con lo que le importa a esta persona
+            # y que supongan una diferencia apreciable
             motivos = []
-            if reco["metros_en_cuesta"] < corta["metros_en_cuesta"]:
-                motivos.append(f"tiene menos cuesta ({reco['metros_en_cuesta']} m frente a {corta['metros_en_cuesta']} m)")
-            if reco["bancos"] > corta["bancos"]:
-                motivos.append(f"tiene más bancos para descansar ({reco['bancos']} frente a {corta['bancos']})")
-            if reco["escaleras"] < corta["escaleras"]:
+            if pesos["cuesta"] > 0 and corta["metros_en_cuesta"] - reco["metros_en_cuesta"] >= 20:
+                motivos.append(f"tiene mucha menos cuesta ({reco['metros_en_cuesta']} m frente a {corta['metros_en_cuesta']} m)")
+            if pesos["descanso"] > 0 and corta["max_sin_banco_m"] - reco["max_sin_banco_m"] >= 30:
+                motivos.append(f"nunca tendrás que andar más de {reco['max_sin_banco_m']} m sin un banco "
+                               f"(en el camino directo, hasta {corta['max_sin_banco_m']} m)")
+            if pesos["escaleras"] > 0 and reco["escaleras"] < corta["escaleras"]:
                 motivos.append("evita escaleras")
-            if reco["dist_max_transporte_m"] < corta["dist_max_transporte_m"]:
+            if pesos["transporte"] > 0 and corta["dist_max_transporte_m"] - reco["dist_max_transporte_m"] >= 50:
                 motivos.append("pasa más cerca del metro y el autobús")
             if not motivos:
                 motivos.append("se adapta mejor a lo que necesitas")
@@ -194,8 +261,9 @@ class Motor:
                 inicio = f"te sugiero un camino {extra} metros más largo que el más directo, pero que"
             texto = f"{perfil.nombre}, {inicio} {_enumerar(motivos)}. {desc}"
 
-        if reco["metros_por_banco"]:
-            texto += f" Encontrarás un banco aproximadamente cada {reco['metros_por_banco']} metros."
+        if reco["zonas_descanso"]:
+            texto += (f" Por el camino pasarás por {reco['zonas_descanso']} sitios donde sentarte"
+                      f" (uno cada {reco['metros_por_zona']} metros, más o menos).")
         return texto
 
     # ---------------------------------------------------------------- API pública
@@ -243,11 +311,7 @@ class Motor:
         i = dist.idxmin()
         fila = capa.loc[i]
         pt = gpd.GeoSeries([fila.geometry], crs=CRS_M).to_crs(4326).iloc[0]
-        nombre = next(
-            (fila[col] for col in ("stop_name", "NOMBRE", "DENOMINACION", "TITULAR", "DIRECCION")
-             if col in fila.index and isinstance(fila[col], str)),
-            None,
-        )
+        nombre = _nombre_lugar(fila, tipo)
         return {
             "tipo": fila["tipo"] if "tipo" in fila.index else tipo,
             "nombre": nombre,
@@ -279,7 +343,8 @@ if __name__ == "__main__":
         for etiqueta, clave in (("Ruta más corta  ", "ruta_mas_corta"), ("Ruta recomendada", "ruta_recomendada")):
             s = r[clave]
             print(f"{etiqueta}: {s['longitud_m']} m | en cuesta {s['metros_en_cuesta']} m | "
-                  f"pendiente máx {s['pendiente_max']} % | bancos {s['bancos']} | escaleras {s['escaleras']}")
+                  f"pendiente máx {s['pendiente_max']} % | zonas descanso {s['zonas_descanso']} | "
+                  f"máx sin banco {s['max_sin_banco_m']} m | escaleras {s['escaleras']}")
         print("\nExplicación:\n" + r["explicacion"])
 
     print("\n" + "=" * 70)
