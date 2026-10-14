@@ -118,6 +118,13 @@ for col in edges_out.columns:
     if col != "geometry":
         edges_out[col] = edges_out[col].apply(lambda v: str(v) if isinstance(v, list) else v)
 
+# Pendiente depurada para el motor de recomendación
+edges_out["pendiente_pct"] = edges_out["grade"].abs() * 100
+# Tramos demasiado cortos para un modelo de 25 m: su pendiente no es fiable
+edges_out.loc[edges_out["length"] < 15, "pendiente_pct"] = 0
+# Tope máximo para limitar errores del modelo de elevación
+edges_out["pendiente_pct"] = edges_out["pendiente_pct"].clip(upper=12)
+
 edges_out.to_crs(epsg=4326).to_file(OUT / "chamberi_calles.geojson", driver="GeoJSON")
 bancos_chamberi.to_crs(epsg=4326).to_file(OUT / "chamberi_bancos.geojson", driver="GeoJSON")
 farmacias_chamberi.to_crs(epsg=4326).to_file(OUT / "chamberi_farmacias.geojson", driver="GeoJSON")
@@ -129,7 +136,7 @@ print(f"Tramos de calle: {len(edges_out)}")
 con_pendiente = "grade" in edges_out.columns
 print(f"Tramos con pendiente: {con_pendiente}")
 if con_pendiente:
-    g = edges_out["grade"].abs() * 100
+    g = edges_out["pendiente_pct"]
     print(f"  Pendiente media: {g.mean():.1f} %  |  máxima: {g.max():.1f} %")
 print(f"Bancos encontrados: {len(bancos_chamberi)}")
 print(f"Farmacias encontradas: {len(farmacias_chamberi)}")
