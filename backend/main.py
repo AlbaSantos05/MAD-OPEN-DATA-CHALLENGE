@@ -13,10 +13,15 @@ from pathlib import Path
 from typing import Literal
 
 import networkx as nx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+
+from typing import Optional
+
+from backend.llm_service import analizar_mensaje_llm
+from backend.profiles import Perfil
 
 # Para poder importar recommendation.py y profiles.py estando en backend/
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -77,6 +82,12 @@ class PeticionRuta(BaseModel):
         }
     }
 
+class PeticionChat(BaseModel):
+    texto: str = Field(..., min_length=1, max_length=500, examples=["Estoy cansada y necesito un banco"])
+    lat: float = Field(..., description="Latitud exacta actual del usuario (OBLIGATORIA)")
+    lon: float = Field(..., description="Longitud exacta actual del usuario (OBLIGATORIA)")
+    perfil_actual: Optional[PerfilIn] = Field(None, description="Perfil actualmente guardado en la interfaz")
+
 
 # ---------------------------------------------------------------- endpoints
 @app.get("/salud")
@@ -116,3 +127,79 @@ def capa(nombre: str):
     if nombre not in CAPAS:
         raise HTTPException(status_code=404, detail=f"Capa desconocida. Opciones: {sorted(CAPAS)}")
     return FileResponse(DATOS / f"chamberi_{nombre}.geojson", media_type="application/geo+json")
+
+@app.post("/chat")
+def chat_interactivo(peticion: PeticionChat):
+    """Endpoint de lenguaje natural: interpreta intención y delega en el motor determinista."""
+    
+    # 1. Analizar el mensaje con el LLM (Structured Outputs)
+    analisis = analizar_mensaje_llm(peticion.texto)
+    
+    # 2. RAMA 1: Alerta de Salud (Respuesta de seguridad inmediata)
+    if analisis.intencion == "alerta_salud":
+        return {
+            "intencion": "alerta_salud",
+            "respuesta": "Si te encuentras mal o se trata de una urgencia médica, por favor llama inmediatamente al 112 o pide ayuda a una persona cercana.",
+            "accion_ui": "mostrar_alerta_urgencia"
+        }
+
+    # 3. RAMA 2: Búsqueda de Recursos Específicos (/atajo)
+    elif analisis.intencion == "buscar_recurso" and analisis.tipo_recurso:
+        try:
+            recurso = motor.mas_cercano(peticion.lat, peticion.lon, analisis.tipo_recurso)
+            nombre = recurso.get("nombre") or f"un punto de {analisis.tipo_recurso}"
+            
+            respuesta_texto = (
+                f"He localizado {nombre} a unos {recurso['distancia_m']} metros de tu ubicación "
+                f"(aproximadamente {recurso['minutos']} minutos a pie)."
+            )
+            return {
+                "intencion": "buscar_recurso",
+                "tipo_recurso": analisis.tipo_recurso,
+                "respuesta": respuesta_texto,
+                "detalle_recurso": recurso,
+                "accion_ui": "marcar_en_mapa"
+            }
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    # 4. RAMA 3: Petición de Calcular Ruta (Se solicita selección de destino en mapa)
+    elif analisis.intencion == "calcular_ruta":
+        # Preservar el perfil guardado o usar uno base sin sobrescribir valores existentes
+        perfil_base = peticion.perfil_actual.model_dump() if peticion.perfil_actual else {}
+        
+        # Aplicar solo las modificaciones indicadas en la frase
+        if analisis.cuestas: perfil_base["cuestas"] = analisis.cuestas
+        if analisis.descanso: perfil_base["descanso"] = analisis.descanso
+        if analisis.escaleras is not None: perfil_base["escaleras"] = analisis.escaleras
+        if analisis.transporte: perfil_base["transporte"] = analisis.transporte
+        if analisis.cansado: perfil_base["cansado"] = True
+
+        return {
+            "intencion": "calcular_ruta",
+            "respuesta": "Entendido. Selecciona tu destino en el mapa o elige un punto predefinido para calcular el mejor camino.",
+            "perfil_actualizado": perfil_base,
+            "accion_ui": "solicitar_destino_mapa"
+        }
+
+    # 5. RAMA 4: Estado de Fatiga / Conversación General
+    else:
+        if analisis.cansado:
+            perfil_base = peticion.perfil_actual.model_dump() if peticion.perfil_actual else {}
+            perfil_base["cansado"] = True
+            perfil_base["descanso"] = "mucho"
+            
+            return {
+                "intencion": "conversacion_general",
+                "respuesta": "He actualizado tus prioridades: priorizaré rutas más llanas, con descansos frecuentes y transporte cercano.",
+                "perfil_actualizado": perfil_base,
+                "sugerencias_botones": ["Buscar banco cercano", "Elegir destino en mapa"],
+                "accion_ui": "actualizar_perfil_contexto"
+            }
+            
+        return {
+            "intencion": "conversacion_general",
+            "respuesta": "Hola, soy tu acompañante urbano por Chamberí. Puedo buscarte el banco o farmacia más cercana, o sugerirte un camino adaptado.",
+            "sugerencias_botones": ["Buscar banco", "Buscar farmacia", "Calcular ruta"],
+            "accion_ui": "mostrar_opciones"
+        }

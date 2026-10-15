@@ -7,3 +7,5 @@ fastapi
 uvicorn
 oracledb>=2.0
 folium
+openai>=1.30.0
+
