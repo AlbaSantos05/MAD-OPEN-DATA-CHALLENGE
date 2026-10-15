@@ -1,0 +1,9 @@
+geopandas>=0.14
+networkx>=3.0
+osmnx>=1.9
+pandas
+requests
+fastapi
+uvicorn
+oracledb>=2.0
+folium

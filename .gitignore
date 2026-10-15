@@ -1,0 +1,7 @@
+.env
+.venv/
+Wallet_*/
+__pycache__/
+cache/
+cartas de pago/
+pipelines/mapa_verificacion.html

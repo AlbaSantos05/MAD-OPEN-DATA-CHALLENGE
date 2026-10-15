@@ -1,0 +1,32 @@
+{
+  "zona": "chamberi",
+  "tramos": 5082,
+  "km_red": 199.1,
+  "poi": {
+    "banco": 3795,
+    "bus": 315,
+    "farmacia": 195,
+    "metro": 79
+  },
+  "cobertura": {
+    "tramo_id": 5082,
+    "nodo_u": 5082,
+    "nodo_v": 5082,
+    "nombre_via": 1636,
+    "tipo_via": 5082,
+    "length_m": 5082,
+    "slope_pct": 5082,
+    "steps": 5082,
+    "benches_20m": 5082,
+    "dist_bench_m": 5082,
+    "dist_transport_m": 5082,
+    "nearest_stop_id": 5082,
+    "stop_accessible": 5082,
+    "dist_pharmacy_m": 5082,
+    "dist_water_m": 0,
+    "trees_20m": 0,
+    "quality_flags": 5082
+  },
+  "pct_tramos_transporte_300m": 95.6,
+  "pct_tramos_con_banco": 52.9
+}
