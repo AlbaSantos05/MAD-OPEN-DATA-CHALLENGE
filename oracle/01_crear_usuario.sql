@@ -4,7 +4,7 @@
 -- Contraseña: 12-30 caracteres, con mayúscula, minúscula y número, sin comillas ni "admin".
 -- =====================================================================
 
-CREATE USER maddata IDENTIFIED BY "CambiaEsta_Contrasena1";
+CREATE USER maddata IDENTIFIED BY "MADcompana_pass1";
 
 GRANT CREATE SESSION, CREATE TABLE, CREATE VIEW, CREATE SEQUENCE,
       CREATE PROCEDURE, CREATE SYNONYM TO maddata;
