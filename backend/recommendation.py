@@ -4,6 +4,9 @@ Carga la capa urbana generada por pipelines/limpieza_datos.py, calcula indicador
 por tramo de calle y recomienda la ruta más adecuada para cada perfil, explicando el porqué.
 """
 import ast
+import json
+import os
+import urllib.request
 import warnings
 from pathlib import Path
 
@@ -16,9 +19,13 @@ from shapely.ops import unary_union
 
 warnings.filterwarnings("ignore", message="Could not parse column")
 
-DATOS = Path(__file__).resolve().parent.parent / "data" / "processed"
+RAIZ = Path(__file__).resolve().parent.parent
+DATOS = RAIZ / "data" / "processed"      # capas antiguas (modo "processed")
+DATASET = RAIZ / "data" / "dataset"      # copia local del dataset que está en Oracle (modo "local")
+# API de lectura del dataset en Oracle (pública y de solo lectura; ver oracle/05_api_rest.sql)
+ORDS_URL_POR_DEFECTO = "https://g65cd3d29f3f6ee-madcompanadb.adb.eu-madrid-1.oraclecloudapps.com/ords/maddata"
 CRS_M = 25830          # sistema métrico de Madrid
-RADIO_BANCOS = 30      # metros alrededor de un tramo para contar bancos
+RADIO_BANCOS = 20      # metros alrededor de un tramo para contar bancos (igual que en Oracle)
 RADIO_GRUPO_BANCOS = 15  # bancos a menos de 2x15 m entre sí forman una misma zona de descanso
 UMBRAL_CUESTA = 4      # % a partir del cual un tramo cuenta como cuesta
 VELOCIDAD = 50         # metros por minuto (~3 km/h, paso tranquilo)
@@ -70,6 +77,8 @@ def _nombre_lugar(fila, tipo):
     """Nombre legible de un recurso según su capa de origen."""
     if _texto(fila, "stop_name"):                       # paradas de metro y bus (GTFS)
         return _texto(fila, "stop_name")
+    if _texto(fila, "nombre_poi"):                      # dataset del proyecto (Oracle)
+        return _texto(fila, "nombre_poi").replace("Banco en ", "Banco en ").strip()
     if tipo == "farmacia":                              # Comunidad de Madrid
         via = " ".join(x for x in (_texto(fila, "DIRECCION_VIAL_TIPO"),
                                    _texto(fila, "DIRECCION_VIAL_NOMBRE")) if x)
@@ -84,27 +93,95 @@ def _nombre_lugar(fila, tipo):
     return None
 
 
+def _leer_env():
+    """Lee ORDS_URL y DATOS_FUENTE del .env de la raíz si no están ya en el entorno."""
+    env = RAIZ / ".env"
+    if env.exists():
+        for linea in env.read_text(encoding="utf-8").splitlines():
+            if "=" in linea and not linea.strip().startswith("#"):
+                k, v = linea.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
+
+
+def _geojson_api(url):
+    with urllib.request.urlopen(url, timeout=60) as r:
+        datos = json.loads(r.read().decode("utf-8"))
+    return gpd.GeoDataFrame.from_features(datos["features"], crs=4326)
+
+
+def _cargar_dataset(fuente):
+    """Devuelve (tramos, poi) del dataset del proyecto.
+    fuente = "api"   -> API de lectura de Oracle (ORDS_URL/dataset/...)
+             "local" -> data/dataset/*.geojson (los mismos datos, sin conexión)"""
+    if fuente == "api":
+        base = os.environ.get("ORDS_URL", ORDS_URL_POR_DEFECTO).rstrip("/") + "/dataset/"
+        print(f"  -> Leyendo el dataset desde la API de Oracle: {base}")
+        return _geojson_api(base + "tramos.geojson"), _geojson_api(base + "poi.geojson")
+    print(f"  -> Leyendo el dataset local: {DATASET}")
+    return gpd.read_file(DATASET / "tramos.geojson"), gpd.read_file(DATASET / "poi.geojson")
+
+
 # ---------------------------------------------------------------- motor
 class Motor:
-    def __init__(self, carpeta=DATOS):
-        print("Cargando capa urbana de Chamberí...")
+    def __init__(self, fuente=None, carpeta=DATOS):
+        """fuente: "api" (Oracle, por defecto), "local" (data/dataset, sin conexión)
+        o "processed" (capas antiguas de limpieza_datos.py). También vale DATOS_FUENTE en .env."""
+        _leer_env()
+        fuente = fuente or os.environ.get("DATOS_FUENTE") or "api"
+        print(f"Cargando capa urbana de Chamberí (fuente: {fuente})...")
 
-        def leer(nombre):
-            return gpd.read_file(carpeta / f"chamberi_{nombre}.geojson").to_crs(CRS_M)
+        if fuente in ("api", "local"):
+            try:
+                tramos, poi = _cargar_dataset(fuente)
+            except Exception as e:                      # sin conexión -> copia local
+                if fuente != "api":
+                    raise
+                print(f"  -> No se pudo leer la API ({e}). Uso la copia local data/dataset/.")
+                fuente = "local"
+                tramos, poi = _cargar_dataset("local")
+            self._desde_dataset(tramos.to_crs(CRS_M), poi.to_crs(CRS_M))
+        else:
+            def leer(nombre):
+                return gpd.read_file(carpeta / f"chamberi_{nombre}.geojson").to_crs(CRS_M)
 
-        self.calles = leer("calles")
-        self.bancos = leer("bancos")
-        self.farmacias = leer("farmacias")
-        metro = leer("metro")
-        metro["tipo"] = "metro"
-        bus = leer("bus")
-        bus["tipo"] = "bus"
-        self.transporte = gpd.GeoDataFrame(pd.concat([metro, bus], ignore_index=True), crs=CRS_M)
+            self.calles = leer("calles")
+            self.bancos = leer("bancos")
+            self.farmacias = leer("farmacias")
+            metro = leer("metro")
+            metro["tipo"] = "metro"
+            bus = leer("bus")
+            bus["tipo"] = "bus"
+            self.transporte = gpd.GeoDataFrame(pd.concat([metro, bus], ignore_index=True), crs=CRS_M)
+            self._calcular_indicadores()
 
+        self.fuente = fuente
         self._agrupar_bancos()
-        self._calcular_indicadores()
         self._construir_grafo()
         print(f"  -> {len(self.calles)} tramos y {self.G.number_of_nodes()} cruces listos.")
+
+    # ---------- dataset del proyecto (Oracle) -> columnas que usa el motor
+    def _desde_dataset(self, tramos, poi):
+        """Los indicadores ya vienen calculados en el dataset: aquí solo se renombran.
+        Cada tramo es un segmento físico; el grafo lo recorre en los dos sentidos."""
+        c = tramos.copy()
+        c["u"] = c["nodo_u"].astype("int64")
+        c["v"] = c["nodo_v"].astype("int64")
+        c["key"] = c["tramo_id"].astype("int64")
+        c["length"] = c["length_m"].astype(float)
+        c["pendiente_pct"] = c["slope_pct"].fillna(0).astype(float)
+        c["escalera"] = c["steps"] == "si"
+        c["nombre"] = c["nombre_via"]
+        c["bancos"] = c["benches_20m"].fillna(0).astype(int)
+        c["dist_transporte"] = c["dist_transport_m"].astype(float)
+        self.calles = c.set_index("tramo_id", drop=False)
+        self.calles.index.name = None
+        self.bidireccional = True
+
+        poi = poi.rename(columns={"nombre": "nombre_poi"})
+        self.bancos = poi[poi["tipo"] == "banco"].copy()
+        self.farmacias = poi[poi["tipo"] == "farmacia"].copy()
+        self.transporte = poi[poi["tipo"].isin(["metro", "bus"])].copy()
+        self.transporte["stop_name"] = self.transporte["nombre_poi"].str.replace(r"^(Metro|Bus) ", "", regex=True)
 
     # ---------- zonas de descanso
     def _agrupar_bancos(self):
@@ -146,6 +223,8 @@ class Motor:
             coords.setdefault(u, puntos[0])
             coords.setdefault(v, puntos[-1])
             self.G.add_edge(u, v, key=int(k), idx=idx)
+            if getattr(self, "bidireccional", False):
+                self.G.add_edge(v, u, key=int(k), idx=idx)
         self.nodos = gpd.GeoDataFrame(
             {"id": list(coords)}, geometry=[Point(xy) for xy in coords.values()], crs=CRS_M
         )
@@ -245,7 +324,7 @@ class Motor:
             if pesos["cuesta"] > 0 and corta["metros_en_cuesta"] - reco["metros_en_cuesta"] >= 20:
                 motivos.append(f"tiene mucha menos cuesta ({reco['metros_en_cuesta']} m frente a {corta['metros_en_cuesta']} m)")
             if pesos["descanso"] > 0 and corta["max_sin_banco_m"] - reco["max_sin_banco_m"] >= 30:
-                motivos.append(f"nunca tendrás que andar más de {reco['max_sin_banco_m']} m sin un banco "
+                motivos.append(f"como mucho andarás {reco['max_sin_banco_m']} m seguidos sin un banco al lado "
                                f"(en el camino directo, hasta {corta['max_sin_banco_m']} m)")
             if pesos["escaleras"] > 0 and reco["escaleras"] < corta["escaleras"]:
                 motivos.append("evita escaleras")

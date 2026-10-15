@@ -1,6 +1,6 @@
 -- =====================================================================
 -- 05 · API REST de SOLO LECTURA con ORDS
--- Ejecutar como MADDATA. Usamos un módulo propio con handlers GET (y no AutoREST),
+-- Ejecutar como MADDATA (se puede repetir: DEFINE_MODULE sustituye el módulo). Usamos un módulo propio con handlers GET (y no AutoREST),
 -- porque AutoREST sin autenticación permitiría también insertar o borrar filas.
 --
 -- URL base: https://<id>-madopendata.adb.<region>.oraclecloudapps.com/ords/maddata/dataset/
@@ -61,10 +61,14 @@ BEGIN
                'features' VALUE JSON_ARRAYAGG(
                   JSON_OBJECT('type' VALUE 'Feature',
                     'properties' VALUE JSON_OBJECT(
-                       'tramo_id' VALUE tramo_id, 'nombre_via' VALUE nombre_via,
+                       'tramo_id' VALUE tramo_id, 'nodo_u' VALUE nodo_u, 'nodo_v' VALUE nodo_v,
+                       'nombre_via' VALUE nombre_via, 'tipo_via' VALUE tipo_via,
                        'length_m' VALUE length_m, 'slope_pct' VALUE slope_pct, 'steps' VALUE steps,
-                       'benches_20m' VALUE benches_20m, 'dist_transport_m' VALUE dist_transport_m,
-                       'dist_pharmacy_m' VALUE dist_pharmacy_m),
+                       'benches_20m' VALUE benches_20m, 'dist_bench_m' VALUE dist_bench_m,
+                       'dist_transport_m' VALUE dist_transport_m, 'nearest_stop_id' VALUE nearest_stop_id,
+                       'stop_accessible' VALUE stop_accessible, 'dist_pharmacy_m' VALUE dist_pharmacy_m,
+                       'dist_water_m' VALUE dist_water_m, 'trees_20m' VALUE trees_20m,
+                       'quality_flags' VALUE quality_flags NULL ON NULL),
                     'geometry' VALUE SDO_UTIL.TO_GEOJSON(geom) FORMAT JSON)
                   RETURNING CLOB)
              RETURNING CLOB)
@@ -79,7 +83,8 @@ BEGIN
                'features' VALUE JSON_ARRAYAGG(
                   JSON_OBJECT('type' VALUE 'Feature',
                     'properties' VALUE JSON_OBJECT('poi_id' VALUE poi_id, 'tipo' VALUE tipo,
-                                                   'nombre' VALUE nombre, 'accesible' VALUE accesible),
+                                                   'nombre' VALUE nombre, 'fuente_id' VALUE fuente_id,
+                                                   'accesible' VALUE accesible NULL ON NULL),
                     'geometry' VALUE SDO_UTIL.TO_GEOJSON(geom) FORMAT JSON)
                   RETURNING CLOB)
              RETURNING CLOB)

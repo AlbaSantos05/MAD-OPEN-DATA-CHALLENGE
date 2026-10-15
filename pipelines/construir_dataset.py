@@ -79,6 +79,10 @@ calles["b"] = calles[["u", "v"]].max(axis=1).astype("int64")
 tramos = calles.drop_duplicates(subset=["a", "b", "key"]).reset_index(drop=True)
 tramos["tramo_id"] = np.arange(1, len(tramos) + 1)
 tramos["nodo_u"], tramos["nodo_v"] = tramos["a"], tramos["b"]
+# La geometría de OSM va de u a v; si hemos reordenado los nodos, le damos la vuelta
+# para que SIEMPRE vaya de nodo_u a nodo_v (el motor lo usa para situar cada cruce).
+girar = tramos["u"] != tramos["nodo_u"]
+tramos.loc[girar, "geometry"] = tramos.loc[girar, "geometry"].reverse()
 tramos["nombre_via"] = tramos["name"].apply(primero)
 tramos["tipo_via"] = tramos["highway"].apply(primero)
 tramos["length_m"] = tramos["length"].round(1)
@@ -195,8 +199,8 @@ for u, v, l in zip(tramos["nodo_u"], tramos["nodo_v"], tramos["length"]):
         G.add_edge(int(u), int(v), w=float(l))
 
 coords = {}
-for u, v, geom in zip(tramos["u"], tramos["v"], tramos.geometry):
-    # u y v ORIGINALES de OSM: la geometría va de u a v (nodo_u/nodo_v están reordenados)
+for u, v, geom in zip(tramos["nodo_u"], tramos["nodo_v"], tramos.geometry):
+    # la geometría ya va de nodo_u a nodo_v (ver paso 1)
     c = list(geom.coords)
     coords.setdefault(int(u), c[0])
     coords.setdefault(int(v), c[-1])
