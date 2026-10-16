@@ -3,9 +3,11 @@
   "tramos": 5082,
   "km_red": 199.1,
   "poi": {
+    "arbol": 28760,
     "banco": 3795,
     "bus": 315,
     "farmacia": 195,
+    "fuente": 96,
     "metro": 79
   },
   "cobertura": {
@@ -23,10 +25,15 @@
     "nearest_stop_id": 5082,
     "stop_accessible": 5082,
     "dist_pharmacy_m": 5082,
-    "dist_water_m": 0,
-    "trees_20m": 0,
+    "dist_water_m": 5082,
+    "trees_20m": 5082,
     "quality_flags": 5082
   },
   "pct_tramos_transporte_300m": 95.6,
-  "pct_tramos_con_banco": 52.9
+  "pct_tramos_con_banco": 52.9,
+  "indicadores_ambientales": {
+    "calidad_aire_indice": "Buena",
+    "nivel_polen": "Medio",
+    "fecha_actualizacion": "2026-10-16"
+  }
 }

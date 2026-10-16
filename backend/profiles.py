@@ -7,14 +7,16 @@ NIVELES = {"nada": 0.0, "algo": 1.0, "mucho": 2.0}
 @dataclass
 class Perfil:
     nombre: str = "Usuario"
-    cuestas: str = "nada"      # dificultad con cuestas: nada / algo / mucho
-    descanso: str = "nada"     # necesidad de bancos para descansar: nada / algo / mucho
-    escaleras: bool = False    # True = evitar escaleras
-    transporte: str = "nada"   # interés en estar cerca de metro/bus: nada / algo / mucho
-    cansado: bool = False      # contexto del momento: "estoy cansado"
+    cuestas: str = "nada"        # dificultad con cuestas: nada / algo / mucho
+    descanso: str = "nada"       # necesidad de bancos para descansar: nada / algo / mucho
+    escaleras: bool = False      # True = evitar escaleras
+    transporte: str = "nada"     # interés en estar cerca de metro/bus: nada / algo / mucho
+    sombra: str = "nada"         # NUEVO: preferencia por tramos arbolados/sombra: nada / algo / mucho
+    sensible_polen: bool = False # NUEVO: True = preferencia por evitar zonas de alto polen
+    cansado: bool = False        # contexto del momento: "estoy cansado"
 
     def __post_init__(self):
-        for campo in ("cuestas", "descanso", "transporte"):
+        for campo in ("cuestas", "descanso", "transporte", "sombra"):
             valor = getattr(self, campo)
             if valor not in NIVELES:
                 raise ValueError(f"{campo} debe ser 'nada', 'algo' o 'mucho' (recibido: {valor})")
@@ -25,6 +27,7 @@ class Perfil:
             "cuesta": NIVELES[self.cuestas],
             "descanso": NIVELES[self.descanso],
             "transporte": NIVELES[self.transporte],
+            "sombra": NIVELES[self.sombra],
             "escaleras": 10.0 if self.escaleras else 0.0,
         }
         # Si la persona dice que está cansada, sube temporalmente la importancia

@@ -147,6 +147,8 @@ class Motor:
             self.calles = leer("calles")
             self.bancos = leer("bancos")
             self.farmacias = leer("farmacias")
+            self.fuentes = leer("fuentes")    
+            self.arbolado = leer("arbolado")
             metro = leer("metro")
             metro["tipo"] = "metro"
             bus = leer("bus")
@@ -180,6 +182,8 @@ class Motor:
         poi = poi.rename(columns={"nombre": "nombre_poi"})
         self.bancos = poi[poi["tipo"] == "banco"].copy()
         self.farmacias = poi[poi["tipo"] == "farmacia"].copy()
+        self.fuentes = poi[poi["tipo"] == "fuente"].copy()      # <-- AÑADIR ESTA LÍNEA
+        self.arbolado = poi[poi["tipo"] == "arbol"].copy()
         self.transporte = poi[poi["tipo"].isin(["metro", "bus"])].copy()
         self.transporte["stop_name"] = self.transporte["nombre_poi"].str.replace(r"^(Metro|Bus) ", "", regex=True)
 
@@ -245,12 +249,16 @@ class Motor:
         f_descanso = 1 / (1 + c["bancos"])                        # 1 si no hay bancos, baja cuantos más haya
         f_transporte = (c["dist_transporte"] / 300).clip(upper=1)  # lejos (>300 m) = penalización máxima
         f_escalera = c["escalera"].astype(float)
+        num_arboles = c.get("trees_20m", pd.Series(0, index=c.index)).fillna(0)
+        f_sombra = 1 / (1 + num_arboles)
+        p_sombra = pesos.get("sombra", 0.0)
         factor = (
             1
             + pesos["cuesta"] * f_cuesta
             + pesos["descanso"] * f_descanso
             + pesos["transporte"] * f_transporte
             + pesos["escaleras"] * f_escalera
+            + p_sombra * f_sombra
         )
         return c["length"] * factor
 
@@ -378,6 +386,7 @@ class Motor:
         capas = {
             "banco": self.bancos,
             "farmacia": self.farmacias,
+            "fuente": self.fuentes,
             "metro": self.transporte[self.transporte["tipo"] == "metro"],
             "bus": self.transporte[self.transporte["tipo"] == "bus"],
             "transporte": self.transporte,

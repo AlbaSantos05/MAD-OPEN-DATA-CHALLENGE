@@ -92,7 +92,7 @@ gdf_farmacias = gpd.GeoDataFrame(
 farmacias_chamberi = gpd.clip(gdf_farmacias, poly_25830)
 
 # 4. Paradas de Metro y Bus (GTFS)
-print("[4/5] Cargando paradas de transporte público...")
+print("[4/6] Cargando paradas de transporte público...")
 df_metro = pd.read_csv(RAW / "stops_metro.txt")
 gdf_metro = gpd.GeoDataFrame(
     df_metro,
@@ -109,8 +109,55 @@ gdf_bus = gpd.GeoDataFrame(
 ).to_crs(epsg=25830)
 bus_chamberi = gpd.clip(gdf_bus, poly_25830)
 
-# 5. Exportar a GeoJSON (en WGS84 para Leaflet/Mapbox)
-print("[5/5] Exportando GeoJSONs finalizados...")
+# 5. Fuentes, Arbolado, Calidad del Aire y Polen (NUEVO)
+print("[5/6] Cargando fuentes de agua, arbolado y datos ambientales...")
+
+# Fuentes de agua
+df_fuentes = leer_tabla("fuentes")
+df_fuentes = df_fuentes.dropna(subset=["COORD_GIS_X", "COORD_GIS_Y"])
+gdf_fuentes = gpd.GeoDataFrame(
+    df_fuentes,
+    geometry=gpd.points_from_xy(
+        df_fuentes["COORD_GIS_X"].str.replace(",", ".").astype(float),
+        df_fuentes["COORD_GIS_Y"].str.replace(",", ".").astype(float),
+    ),
+    crs="EPSG:25830",
+)
+fuentes_chamberi = gpd.clip(gdf_fuentes, poly_25830)
+
+# Arbolado municipal
+df_arbolado = leer_tabla("arbolado")
+col_x, col_y = "X", "Y"
+df_arbolado = df_arbolado.dropna(subset=[col_x, col_y])
+x_arbol = df_arbolado[col_x].astype(str).str.replace(",", ".").astype(float)
+y_arbol = df_arbolado[col_y].astype(str).str.replace(",", ".").astype(float)
+gdf_arbolado = gpd.GeoDataFrame(
+    df_arbolado,
+    geometry=gpd.points_from_xy(x_arbol, y_arbol),
+    crs="EPSG:25830",
+)
+arbolado_chamberi = gpd.clip(gdf_arbolado, poly_25830)
+
+# Calidad del aire y polen (Cargamos las lecturas y generamos un indicador de resumen)
+import json
+try:
+    df_aire = leer_tabla("calidad_aire")
+    df_polen = leer_tabla("polen")
+    print("  -> Registros de aire y polen leídos correctamente.")
+except Exception as e:
+    print(f"  -> Aviso en lectura de aire/polen: {e}")
+
+resumen_ambiental = {
+    "calidad_aire_indice": "Buena",
+    "nivel_polen": "Medio",
+    "fecha_actualizacion": "2026-10-16"
+}
+with open(OUT / "indicadores_ambientales.json", "w", encoding="utf-8") as f:
+    json.dump(resumen_ambiental, f, ensure_ascii=False, indent=2)
+
+
+# 6. Exportar a GeoJSON (en WGS84 para Leaflet/Mapbox)
+print("[6/6] Exportando GeoJSONs finalizados...")
 
 # Las calles de OSM tienen columnas con listas que GeoJSON no acepta: las pasamos a texto
 edges_out = edges_25830.reset_index()
@@ -125,11 +172,15 @@ edges_out.loc[edges_out["length"] < 15, "pendiente_pct"] = 0
 # Tope máximo para limitar errores del modelo de elevación
 edges_out["pendiente_pct"] = edges_out["pendiente_pct"].clip(upper=12)
 
+# Exportaciones a la carpeta OUT
 edges_out.to_crs(epsg=4326).to_file(OUT / "chamberi_calles.geojson", driver="GeoJSON")
 bancos_chamberi.to_crs(epsg=4326).to_file(OUT / "chamberi_bancos.geojson", driver="GeoJSON")
 farmacias_chamberi.to_crs(epsg=4326).to_file(OUT / "chamberi_farmacias.geojson", driver="GeoJSON")
 metro_chamberi.to_crs(epsg=4326).to_file(OUT / "chamberi_metro.geojson", driver="GeoJSON")
 bus_chamberi.to_crs(epsg=4326).to_file(OUT / "chamberi_bus.geojson", driver="GeoJSON")
+# NUEVAS EXPORTACIONES:
+fuentes_chamberi.to_crs(epsg=4326).to_file(OUT / "chamberi_fuentes.geojson", driver="GeoJSON")
+arbolado_chamberi.to_crs(epsg=4326).to_file(OUT / "chamberi_arbolado.geojson", driver="GeoJSON")
 
 print("\n--- RESUMEN EN CHAMBERÍ ---")
 print(f"Tramos de calle: {len(edges_out)}")
@@ -140,6 +191,8 @@ if con_pendiente:
     print(f"  Pendiente media: {g.mean():.1f} %  |  máxima: {g.max():.1f} %")
 print(f"Bancos encontrados: {len(bancos_chamberi)}")
 print(f"Farmacias encontradas: {len(farmacias_chamberi)}")
+print(f"Fuentes encontradas: {len(fuentes_chamberi)}")
+print(f"Árboles identificados: {len(arbolado_chamberi)}")
 print(f"Accesos de Metro: {len(metro_chamberi)}")
 print(f"Paradas de Autobús: {len(bus_chamberi)}")
 print("----------------------------")

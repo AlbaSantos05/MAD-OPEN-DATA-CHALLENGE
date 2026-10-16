@@ -260,6 +260,14 @@ resumen = {
     "pct_tramos_transporte_300m": round(float((tramos["dist_transport_m"] <= 300).mean() * 100), 1),
     "pct_tramos_con_banco": round(float((tramos["benches_20m"] > 0).mean() * 100), 1),
 }
+
+# --- Añadir justo antes de guardar resumen.json ---
+ruta_env = PROC / "indicadores_ambientales.json"
+if ruta_env.exists():
+    with open(ruta_env, "r", encoding="utf-8") as f:
+        resumen["indicadores_ambientales"] = json.load(f)
+
+        
 (OUT / "resumen.json").write_text(json.dumps(resumen, indent=2, ensure_ascii=False), encoding="utf-8")
 print("[5] Exportado en data/dataset/")
 print(json.dumps(resumen, indent=2, ensure_ascii=False))
