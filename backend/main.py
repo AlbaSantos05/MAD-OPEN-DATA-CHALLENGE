@@ -96,6 +96,14 @@ class PeticionAcompanar(BaseModel):
     lon_antes: Optional[float] = None
     contexto: Optional[dict] = Field(None, description="Contexto devuelto por el paso anterior. "
                                      "En el primer paso, solo {'mes': 10, 'hora': 17} (opcional).")
+    dice: Optional[str] = Field(None, max_length=500, examples=["Tengo calor"],
+                                description="Lo que la persona acaba de decir en este paso (opcional): "
+                                            "«estoy cansada», «tengo calor», «me estoy mareando», «ya estoy mejor»...")
+
+
+class PeticionMapa(BaseModel):
+    perfil: PerfilIn
+    contexto: Optional[dict] = Field(None, description="Contexto del paseo (estados dichos, mes, hora)")
 
 
 class PeticionVolver(BaseModel):
@@ -157,8 +165,37 @@ def acompanar(peticion: PeticionAcompanar):
     """Acompañamiento libre (sin destino): devuelve como mucho UN aviso útil para este paso,
     con su motivo y la fuente de datos, más el contexto actualizado para el paso siguiente."""
     perfil = Perfil(**peticion.perfil.model_dump())
-    return acompanante.paso(peticion.lat, peticion.lon, perfil, peticion.contexto,
-                            lat_antes=peticion.lat_antes, lon_antes=peticion.lon_antes)
+    estado, urgencia, analisis = None, False, None
+    if peticion.dice:
+        # El LLM solo INTERPRETA lo dicho; qué recomendar lo deciden los datos
+        analisis = analizar_mensaje_llm(peticion.dice)
+        urgencia = analisis.intencion == "alerta_salud"
+        estado = analisis.estado or ("cansado" if analisis.cansado else None)
+    r = acompanante.paso(peticion.lat, peticion.lon, perfil, peticion.contexto,
+                         lat_antes=peticion.lat_antes, lon_antes=peticion.lon_antes,
+                         estado=estado, urgencia=urgencia)
+    if analisis is not None:
+        r["entendido"] = {"intencion": analisis.intencion, "estado": estado,
+                          "tipo_recurso": analisis.tipo_recurso}
+        if analisis.intencion == "volver":
+            try:
+                r["vuelta"] = acompanante.volver(peticion.lat, peticion.lon, perfil, r["contexto"])
+            except (ValueError, nx.NetworkXNoPath):
+                r["vuelta"] = None
+        elif analisis.intencion == "buscar_recurso" and analisis.tipo_recurso:
+            try:
+                r["recurso"] = motor.mas_cercano(peticion.lat, peticion.lon, analisis.tipo_recurso)
+            except ValueError:
+                r["recurso"] = None
+    return r
+
+
+@app.post("/mapa_personal")
+def mapa_personal(peticion: PeticionMapa):
+    """GeoJSON de las calles con su idoneidad 0-100 y categoría (apta / regular / no apta)
+    PARA ESTE PERFIL y lo que ha dicho en el paseo. El mismo barrio cambia según la persona."""
+    perfil = Perfil(**peticion.perfil.model_dump())
+    return acompanante.mapa_personal(perfil, peticion.contexto)
 
 
 @app.post("/volver")
@@ -252,6 +289,19 @@ def chat_interactivo(peticion: PeticionChat):
 
     # 5. RAMA 4: Estado de Fatiga / Conversación General
     else:
+        # Dice cómo se encuentra (calor, mareo, piernas, mejor): responde el acompañante con datos
+        if analisis.estado and analisis.estado != "cansado":
+            datos = peticion.perfil_actual.model_dump() if peticion.perfil_actual else {}
+            r = acompanante.paso(peticion.lat, peticion.lon, Perfil(**datos), peticion.contexto,
+                                 estado=analisis.estado)
+            return {
+                "intencion": "estado",
+                "estado": analisis.estado,
+                "respuesta": r["aviso"]["mensaje"] if r["aviso"] else "De acuerdo, sigo pendiente.",
+                "detalle": r["aviso"],
+                "contexto": r["contexto"],
+                "accion_ui": "mostrar_aviso_acompanante",
+            }
         if analisis.cansado:
             perfil_base = peticion.perfil_actual.model_dump() if peticion.perfil_actual else {}
             perfil_base["cansado"] = True

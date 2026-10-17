@@ -57,22 +57,31 @@ def paseo_demo(motor, paso_m=PASO_M):
     return [[round(p.y, 6), round(p.x, 6)] for p in pts]
 
 
-def simular(acomp, perfil, puntos, mes, hora, cansada_en=None, verbose=True):
+FRASES = {"cansado": "Estoy cansada", "calor": "Tengo calor", "mareo": "Me estoy mareando",
+          "dolor_piernas": "Me duelen las piernas", "mejor": "Ya estoy mejor"}
+
+
+def simular(acomp, perfil, puntos, mes, hora, cansada_en=None, dice=None, verbose=True):
+    """Recorre los puntos como si fuera el móvil. `dice` = {índice_del_punto: estado}
+    simula lo que la persona dice en ese momento («calor», «mareo», «mejor»...)."""
     ctx = {"mes": mes, "hora": hora}
+    dice = dict(dice or {})
+    if cansada_en is not None:
+        dice.setdefault(cansada_en, "cansado")
     avisos, antes = [], None
     for i, (lat, lon) in enumerate(puntos):
-        if cansada_en is not None and i == cansada_en:
-            perfil.cansado = True
-            if verbose:
-                print(f"\n   [{ctx.get('metros_andados', 0):>5.0f} m] {perfil.nombre} dice: «Estoy cansada»")
-        r = acomp.paso(lat, lon, perfil, ctx,
+        estado = dice.get(i)
+        if estado and verbose:
+            print(f"\n   [{ctx.get('metros_andados', 0):>5.0f} m] {perfil.nombre} dice: «{FRASES.get(estado, estado)}»")
+        r = acomp.paso(lat, lon, perfil, ctx, estado=estado,
                        lat_antes=antes[0] if antes else None, lon_antes=antes[1] if antes else None)
         ctx, antes = r["contexto"], (lat, lon)
         if r["aviso"]:
             avisos.append((ctx["metros_andados"], r["aviso"]["tipo"], r["aviso"]["mensaje"]))
             if verbose:
-                print(f"   [{ctx['metros_andados']:>5.0f} m] {r['posicion']['calle'] or '':<34.34} "
-                      f"{r['aviso']['tipo'].upper():<10} {r['aviso']['mensaje']}")
+                z = r["zona"]
+                print(f"   [{ctx['metros_andados']:>5.0f} m] {r['posicion']['calle'] or '':<30.30} "
+                      f"zona {z['idoneidad_aqui']:>3} {r['aviso']['tipo'].upper():<12} {r['aviso']['mensaje']}")
     return avisos, ctx
 
 
@@ -94,7 +103,9 @@ if __name__ == "__main__":
     carmen = Perfil("Carmen", cuestas="mucho", descanso="mucho", escaleras=True, sensible_polen=True)
     antonio = Perfil("Antonio", transporte="algo")
     print("\n=== CARMEN (cuestas y descanso «mucho», evita escaleras, sensible al polen) ===")
-    simular(acomp, carmen, puntos, args.mes, args.hora, cansada_en=len(puntos) // 2)
+    n = len(puntos)
+    simular(acomp, carmen, puntos, args.mes, args.hora,
+            dice={n // 5: "calor", n // 2: "mareo", (2 * n) // 3: "mejor"})
     print("\n=== ANTONIO (sin dificultades, le gusta tener transporte cerca) ===")
     simular(acomp, antonio, puntos, args.mes, args.hora)
 
