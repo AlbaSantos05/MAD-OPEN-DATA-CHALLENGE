@@ -250,15 +250,15 @@ class Motor:
         f_transporte = (c["dist_transporte"] / 300).clip(upper=1)  # lejos (>300 m) = penalización máxima
         f_escalera = c["escalera"].astype(float)
         num_arboles = c.get("trees_20m", pd.Series(0, index=c.index)).fillna(0)
-        f_sombra = 1 / (1 + num_arboles)
-        p_sombra = pesos.get("sombra", 0.0)
+        f_arbolado = 1 / (1 + num_arboles)          # menos árboles a 20 m = más coste (no implica sombra)
+        p_arbolado = pesos.get("arbolado", 0.0)
         factor = (
             1
             + pesos["cuesta"] * f_cuesta
             + pesos["descanso"] * f_descanso
             + pesos["transporte"] * f_transporte
             + pesos["escaleras"] * f_escalera
-            + p_sombra * f_sombra
+            + p_arbolado * f_arbolado
         )
         return c["length"] * factor
 

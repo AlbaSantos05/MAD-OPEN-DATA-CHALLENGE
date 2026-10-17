@@ -1,6 +1,8 @@
 """Calendario real de polen para Chamberí (sustituye al «Polen: Medio» inventado).
 
-Entrada : data/raw/polen.csv  (Comunidad de Madrid, histórico de mediciones de polen)
+Entrada : data/raw/polen*.csv  (Comunidad de Madrid, histórico de mediciones de polen).
+          Lee TODOS los ficheros que empiecen por "polen" (polen.csv, polen_2025.csv, polen_2024.csv...),
+          así basta con dejar los años descargados en data/raw/. Las fechas repetidas se cuentan una vez.
 Salida  : data/processed/polen_mes.csv  -> columnas de la tabla Oracle POLEN_MES
           (tipo_polen, mes, nivel_medio, nivel)
 
@@ -15,7 +17,7 @@ Método
         alto  : «Alto» o superior (incluye «Muy alto»)
   5. Los tipos sin umbral oficial no se clasifican (se omiten).
 
-Limitación: es un PATRÓN ESTACIONAL de los meses disponibles en polen.csv, no el polen
+Limitación: es un PATRÓN ESTACIONAL de los meses disponibles en los ficheros, no el polen
 de hoy ni de una calle concreta. Los meses sin datos no aparecen en la salida.
 
 Ejecutar desde la raíz del proyecto:
@@ -26,7 +28,7 @@ from pathlib import Path
 import pandas as pd
 
 BASE = Path(__file__).resolve().parent.parent
-ENTRADA = BASE / "data" / "raw" / "polen.csv"
+RAW = BASE / "data" / "raw"
 SALIDA = BASE / "data" / "processed" / "polen_mes.csv"
 
 CAPTADORES_MADRID = ["AYTM", "FACF"]
@@ -61,8 +63,66 @@ def clasificar(tipo, valor):
     return "bajo"
 
 
+COLUMNAS = ["captador", "fecha_lectura", "tipo_polinico", "granos_de_polen_x_metro_cubico"]
+
+
+def leer_fichero(ruta):
+    """Lee un CSV de polen aunque venga en otra codificación (los años antiguos usan latin-1)
+    o con otro separador, y deja las columnas con los nombres de polen.csv."""
+    for codificacion in ("utf-8-sig", "latin-1"):
+        try:
+            df = pd.read_csv(ruta, sep=None, engine="python", encoding=codificacion)
+            break
+        except UnicodeDecodeError:
+            continue
+    df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+    # Por si algún año trae los nombres algo distintos
+    buscar = {"captador": "captador", "fecha": "fecha_lectura", "tipo": "tipo_polinico", "granos": "granos_de_polen_x_metro_cubico"}
+    renombrar = {}
+    for clave, destino in buscar.items():
+        col = next((c for c in df.columns if clave in c), None)
+        if col:
+            renombrar[col] = destino
+    df = df.rename(columns=renombrar)
+    faltan = [c for c in COLUMNAS if c not in df.columns]
+    if faltan:
+        raise SystemExit(f"{ruta.name}: no encuentro las columnas {faltan}. Columnas del fichero: {list(df.columns)}")
+    df = df[COLUMNAS].copy()
+    # Fechas: primero AAAA-MM-DD (formato de polen.csv); si no encaja, DD/MM/AAAA (años antiguos)
+    original = df["fecha_lectura"].astype(str).str.strip()
+    # AAAA-MM-DD (2026) o AAAA/MM/DD (2024 y 2025): se unifican las barras a guiones
+    fecha = pd.to_datetime(original.str[:10].str.replace("/", "-"), format="%Y-%m-%d", errors="coerce")
+    resto = fecha.isna()
+    if resto.any():   # cualquier otro formato (1/1/2024, 01-01-2024 0:00...), con el día delante
+        fecha[resto] = pd.to_datetime(original[resto], dayfirst=True, format="mixed", errors="coerce")
+    df["fecha_lectura"] = fecha.dt.strftime("%Y-%m-%d")
+    df.attrs["ejemplo_fecha"] = original.iloc[0] if len(original) else ""
+    df["granos_de_polen_x_metro_cubico"] = pd.to_numeric(
+        df["granos_de_polen_x_metro_cubico"].astype(str).str.replace(",", "."), errors="coerce")
+    df["captador"] = df["captador"].astype(str).str.strip().str.upper()
+    df["tipo_polinico"] = df["tipo_polinico"].astype(str).str.strip()
+    return df
+
+
 def main():
-    df = pd.read_csv(ENTRADA, sep=";", encoding="utf-8-sig")
+    ficheros = sorted(RAW.glob("polen*.csv"))
+    if not ficheros:
+        raise SystemExit(f"No hay ningún polen*.csv en {RAW}")
+    partes = []
+    for f in ficheros:
+        p = leer_fichero(f)
+        utiles = p["captador"].isin(CAPTADORES_MADRID) & p["tipo_polinico"].isin(UMBRALES) & p["fecha_lectura"].notna()
+        print(f"  {f.name}: {len(p)} filas, {int(utiles.sum())} útiles (Madrid ciudad, tipos con umbral, fecha válida)")
+        if not utiles.any():
+            print(f"    AVISO: nada útil en {f.name}. Captadores: {sorted(p['captador'].unique())[:12]}"
+                  f" | tipos: {sorted(p['tipo_polinico'].unique())[:8]}..."
+                  f" | fecha de ejemplo: {p.attrs.get('ejemplo_fecha')!r}"
+                  f" | fechas válidas: {int(p['fecha_lectura'].notna().sum())}")
+        partes.append(p)
+    df = pd.concat(partes, ignore_index=True)
+    df = df.dropna(subset=["fecha_lectura"])
+    df = df.drop_duplicates(["captador", "fecha_lectura", "tipo_polinico"])
+    print("Ficheros leídos:", ", ".join(f.name for f in ficheros))
     df = df[df["captador"].isin(CAPTADORES_MADRID) & df["tipo_polinico"].isin(UMBRALES)].copy()
     df["fecha"] = pd.to_datetime(df["fecha_lectura"].str[:10])
     df["granos"] = pd.to_numeric(df["granos_de_polen_x_metro_cubico"], errors="coerce")

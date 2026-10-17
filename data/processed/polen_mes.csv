@@ -1,136 +1,181 @@
 tipo_polen,mes,nivel_medio,nivel
 Arce,1,0.0,bajo
 Arce,2,0.0,bajo
-Arce,3,4.9,bajo
-Arce,4,39.0,alto
-Arce,5,3.0,bajo
-Arce,6,0.0,bajo
+Arce,3,2.4,bajo
+Arce,4,17.4,medio
+Arce,5,2.4,bajo
+Arce,6,0.3,bajo
 Arce,7,0.0,bajo
 Arce,8,0.0,bajo
 Arce,9,0.0,bajo
-Cupresáceas/Taxáceas,1,85.1,medio
-Cupresáceas/Taxáceas,2,459.7,alto
-Cupresáceas/Taxáceas,3,97.4,medio
-Cupresáceas/Taxáceas,4,7.8,bajo
-Cupresáceas/Taxáceas,5,5.7,bajo
-Cupresáceas/Taxáceas,6,3.0,bajo
-Cupresáceas/Taxáceas,7,0.8,bajo
-Cupresáceas/Taxáceas,8,0.4,bajo
+Arce,10,0.0,bajo
+Arce,11,0.0,bajo
+Arce,12,0.0,bajo
+Cupresáceas/Taxáceas,1,115.1,medio
+Cupresáceas/Taxáceas,2,381.0,alto
+Cupresáceas/Taxáceas,3,61.2,medio
+Cupresáceas/Taxáceas,4,6.5,bajo
+Cupresáceas/Taxáceas,5,6.8,bajo
+Cupresáceas/Taxáceas,6,2.9,bajo
+Cupresáceas/Taxáceas,7,0.7,bajo
+Cupresáceas/Taxáceas,8,0.3,bajo
 Cupresáceas/Taxáceas,9,0.4,bajo
-Fresno,1,6.1,bajo
-Fresno,2,27.7,medio
-Fresno,3,1.0,bajo
-Fresno,4,0.0,bajo
+Cupresáceas/Taxáceas,10,3.7,bajo
+Cupresáceas/Taxáceas,11,23.6,bajo
+Cupresáceas/Taxáceas,12,79.2,medio
+Fresno,1,6.4,bajo
+Fresno,2,18.4,bajo
+Fresno,3,0.8,bajo
+Fresno,4,0.2,bajo
 Fresno,5,0.0,bajo
 Fresno,6,0.0,bajo
 Fresno,7,0.0,bajo
 Fresno,8,0.0,bajo
 Fresno,9,0.0,bajo
-Gramíneas,1,0.3,bajo
-Gramíneas,2,3.0,bajo
-Gramíneas,3,3.9,bajo
-Gramíneas,4,23.8,bajo
-Gramíneas,5,99.7,alto
-Gramíneas,6,43.1,medio
-Gramíneas,7,2.9,bajo
-Gramíneas,8,1.8,bajo
-Gramíneas,9,1.4,bajo
+Fresno,10,0.0,bajo
+Fresno,11,0.1,bajo
+Fresno,12,0.4,bajo
+Gramíneas,1,0.6,bajo
+Gramíneas,2,2.4,bajo
+Gramíneas,3,2.3,bajo
+Gramíneas,4,14.0,bajo
+Gramíneas,5,92.4,alto
+Gramíneas,6,48.6,medio
+Gramíneas,7,4.9,bajo
+Gramíneas,8,1.4,bajo
+Gramíneas,9,1.1,bajo
+Gramíneas,10,0.6,bajo
+Gramíneas,11,0.2,bajo
+Gramíneas,12,0.2,bajo
 Moreras,1,0.0,bajo
 Moreras,2,0.0,bajo
-Moreras,3,24.1,medio
-Moreras,4,43.6,alto
-Moreras,5,0.1,bajo
-Moreras,6,0.1,bajo
+Moreras,3,14.4,bajo
+Moreras,4,39.8,alto
+Moreras,5,1.4,bajo
+Moreras,6,0.0,bajo
 Moreras,7,0.0,bajo
 Moreras,8,0.0,bajo
 Moreras,9,0.0,bajo
+Moreras,10,0.0,bajo
+Moreras,11,0.0,bajo
+Moreras,12,0.0,bajo
 Olivo,1,0.0,bajo
 Olivo,2,0.0,bajo
 Olivo,3,0.0,bajo
-Olivo,4,62.0,medio
-Olivo,5,185.2,alto
-Olivo,6,13.2,bajo
-Olivo,7,0.6,bajo
-Olivo,8,0.5,bajo
-Olivo,9,0.4,bajo
-Olmos,1,0.1,bajo
-Olmos,2,69.2,alto
-Olmos,3,4.5,bajo
-Olmos,4,0.4,bajo
-Olmos,5,0.0,bajo
-Olmos,6,0.0,bajo
+Olivo,4,21.7,bajo
+Olivo,5,99.0,alto
+Olivo,6,35.4,medio
+Olivo,7,0.5,bajo
+Olivo,8,0.2,bajo
+Olivo,9,0.1,bajo
+Olivo,10,0.0,bajo
+Olivo,11,0.0,bajo
+Olivo,12,0.0,bajo
+Olmos,1,0.8,bajo
+Olmos,2,79.5,alto
+Olmos,3,3.0,bajo
+Olmos,4,0.3,bajo
+Olmos,5,0.1,bajo
+Olmos,6,0.1,bajo
 Olmos,7,0.0,bajo
 Olmos,8,0.0,bajo
 Olmos,9,0.0,bajo
-Pinos,1,1.1,bajo
-Pinos,2,0.6,bajo
-Pinos,3,13.2,bajo
-Pinos,4,30.1,bajo
-Pinos,5,82.1,medio
-Pinos,6,16.8,bajo
-Pinos,7,1.4,bajo
-Pinos,8,0.9,bajo
-Pinos,9,0.4,bajo
+Olmos,10,0.0,bajo
+Olmos,11,0.0,bajo
+Olmos,12,0.0,bajo
+Pinos,1,0.5,bajo
+Pinos,2,0.4,bajo
+Pinos,3,10.0,bajo
+Pinos,4,34.5,bajo
+Pinos,5,81.4,medio
+Pinos,6,37.5,bajo
+Pinos,7,2.0,bajo
+Pinos,8,0.8,bajo
+Pinos,9,0.7,bajo
+Pinos,10,1.9,bajo
+Pinos,11,2.7,bajo
+Pinos,12,0.8,bajo
 Plantago,1,0.0,bajo
 Plantago,2,0.0,bajo
-Plantago,3,0.1,bajo
-Plantago,4,7.2,bajo
-Plantago,5,15.7,bajo
-Plantago,6,6.6,bajo
-Plantago,7,1.0,bajo
+Plantago,3,0.3,bajo
+Plantago,4,20.9,bajo
+Plantago,5,33.1,alto
+Plantago,6,7.5,bajo
+Plantago,7,1.3,bajo
 Plantago,8,0.3,bajo
 Plantago,9,0.2,bajo
+Plantago,10,0.1,bajo
+Plantago,11,0.0,bajo
+Plantago,12,0.0,bajo
 Plátano de paseo,1,0.0,bajo
 Plátano de paseo,2,0.0,bajo
-Plátano de paseo,3,812.9,alto
-Plátano de paseo,4,299.3,alto
-Plátano de paseo,5,0.7,bajo
-Plátano de paseo,6,0.0,bajo
+Plátano de paseo,3,568.0,alto
+Plátano de paseo,4,481.0,alto
+Plátano de paseo,5,3.3,bajo
+Plátano de paseo,6,0.3,bajo
 Plátano de paseo,7,0.1,bajo
-Plátano de paseo,8,0.0,bajo
-Plátano de paseo,9,0.3,bajo
-Populus,1,0.0,bajo
-Populus,2,29.9,medio
-Populus,3,63.7,alto
-Populus,4,1.9,bajo
+Plátano de paseo,8,0.1,bajo
+Plátano de paseo,9,0.4,bajo
+Plátano de paseo,10,0.5,bajo
+Plátano de paseo,11,0.1,bajo
+Plátano de paseo,12,0.1,bajo
+Populus,1,0.1,bajo
+Populus,2,15.9,bajo
+Populus,3,59.2,alto
+Populus,4,4.3,bajo
 Populus,5,0.0,bajo
-Populus,6,0.0,bajo
+Populus,6,0.1,bajo
 Populus,7,0.1,bajo
 Populus,8,0.0,bajo
 Populus,9,0.0,bajo
+Populus,10,0.0,bajo
+Populus,11,0.0,bajo
+Populus,12,0.0,bajo
 Quenopodiáceas/Amarantáceas,1,0.0,bajo
 Quenopodiáceas/Amarantáceas,2,0.0,bajo
-Quenopodiáceas/Amarantáceas,3,0.2,bajo
-Quenopodiáceas/Amarantáceas,4,1.8,bajo
-Quenopodiáceas/Amarantáceas,5,2.2,bajo
-Quenopodiáceas/Amarantáceas,6,2.8,bajo
-Quenopodiáceas/Amarantáceas,7,1.4,bajo
-Quenopodiáceas/Amarantáceas,8,1.4,bajo
-Quenopodiáceas/Amarantáceas,9,1.4,bajo
-Quercus,1,0.1,bajo
-Quercus,2,0.0,bajo
-Quercus,3,0.3,bajo
-Quercus,4,287.1,alto
-Quercus,5,95.9,medio
-Quercus,6,26.3,bajo
-Quercus,7,2.1,bajo
-Quercus,8,2.9,bajo
-Quercus,9,1.5,bajo
+Quenopodiáceas/Amarantáceas,3,0.1,bajo
+Quenopodiáceas/Amarantáceas,4,1.0,bajo
+Quenopodiáceas/Amarantáceas,5,1.5,bajo
+Quenopodiáceas/Amarantáceas,6,1.8,bajo
+Quenopodiáceas/Amarantáceas,7,1.7,bajo
+Quenopodiáceas/Amarantáceas,8,2.0,bajo
+Quenopodiáceas/Amarantáceas,9,1.5,bajo
+Quenopodiáceas/Amarantáceas,10,0.5,bajo
+Quenopodiáceas/Amarantáceas,11,0.0,bajo
+Quenopodiáceas/Amarantáceas,12,0.0,bajo
+Quercus,1,0.4,bajo
+Quercus,2,0.1,bajo
+Quercus,3,2.0,bajo
+Quercus,4,192.8,alto
+Quercus,5,192.9,alto
+Quercus,6,43.8,bajo
+Quercus,7,3.8,bajo
+Quercus,8,1.9,bajo
+Quercus,9,1.1,bajo
+Quercus,10,0.8,bajo
+Quercus,11,0.3,bajo
+Quercus,12,0.2,bajo
 Rumex (Acederas),1,0.0,bajo
-Rumex (Acederas),2,0.0,bajo
+Rumex (Acederas),2,0.1,bajo
 Rumex (Acederas),3,0.4,bajo
-Rumex (Acederas),4,4.2,bajo
-Rumex (Acederas),5,4.7,bajo
-Rumex (Acederas),6,2.8,bajo
-Rumex (Acederas),7,0.1,bajo
+Rumex (Acederas),4,3.6,bajo
+Rumex (Acederas),5,11.3,medio
+Rumex (Acederas),6,3.2,bajo
+Rumex (Acederas),7,0.2,bajo
 Rumex (Acederas),8,0.0,bajo
-Rumex (Acederas),9,0.1,bajo
-Urticaceae (Ortigas),1,0.6,bajo
-Urticaceae (Ortigas),2,3.7,bajo
-Urticaceae (Ortigas),3,7.7,bajo
-Urticaceae (Ortigas),4,17.4,alto
-Urticaceae (Ortigas),5,3.6,bajo
-Urticaceae (Ortigas),6,3.9,bajo
-Urticaceae (Ortigas),7,1.0,bajo
-Urticaceae (Ortigas),8,0.5,bajo
-Urticaceae (Ortigas),9,0.2,bajo
+Rumex (Acederas),9,0.0,bajo
+Rumex (Acederas),10,0.0,bajo
+Rumex (Acederas),11,0.0,bajo
+Rumex (Acederas),12,0.0,bajo
+Urticaceae (Ortigas),1,2.2,bajo
+Urticaceae (Ortigas),2,8.3,bajo
+Urticaceae (Ortigas),3,10.4,medio
+Urticaceae (Ortigas),4,17.2,alto
+Urticaceae (Ortigas),5,5.1,bajo
+Urticaceae (Ortigas),6,4.2,bajo
+Urticaceae (Ortigas),7,1.8,bajo
+Urticaceae (Ortigas),8,0.7,bajo
+Urticaceae (Ortigas),9,0.5,bajo
+Urticaceae (Ortigas),10,0.5,bajo
+Urticaceae (Ortigas),11,1.2,bajo
+Urticaceae (Ortigas),12,1.2,bajo
