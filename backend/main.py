@@ -28,6 +28,8 @@ from backend.profiles import Perfil
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from recommendation import Motor, DATOS  # noqa: E402
 from profiles import Perfil  # noqa: E402
+from acompanamiento import Acompanante  # noqa: E402
+from simular_paseo import paseo_demo  # noqa: E402
 
 app = FastAPI(
     title="Acompañante urbano · Chamberí",
@@ -46,10 +48,11 @@ app.add_middleware(
 
 # El motor se carga una sola vez al arrancar (tarda unos segundos)
 motor = Motor()
+acompanante = Acompanante(motor)
 
 Nivel = Literal["nada", "algo", "mucho"]
 TipoAtajo = Literal["banco", "farmacia", "fuente", "metro", "bus", "transporte"]
-CAPAS = {"calles", "bancos", "farmacias", "fuente", "metro", "bus"}
+CAPAS = {"calles", "bancos", "farmacias", "fuentes", "metro", "bus"}
 
 
 # ---------------------------------------------------------------- modelos de datos
@@ -64,6 +67,8 @@ class PerfilIn(BaseModel):
     descanso: Nivel = "nada"
     escaleras: bool = False
     transporte: Nivel = "nada"
+    arbolado: Nivel = "nada"
+    sensible_polen: bool = False
     cansado: bool = False
 
 
@@ -83,11 +88,38 @@ class PeticionRuta(BaseModel):
         }
     }
 
+class PeticionAcompanar(BaseModel):
+    """Un paso del paseo libre. El frontend reenvía el `contexto` que devolvió el paso anterior."""
+    perfil: PerfilIn
+    lat: float = Field(..., examples=[40.4328])
+    lon: float = Field(..., examples=[-3.7040])
+    lat_antes: Optional[float] = Field(None, description="Posición del paso anterior (sentido de la marcha)")
+    lon_antes: Optional[float] = None
+    contexto: Optional[dict] = Field(None, description="Contexto devuelto por el paso anterior. "
+                                     "En el primer paso, solo {'mes': 10, 'hora': 17} (opcional).")
+    dice: Optional[str] = Field(None, max_length=500, examples=["Tengo calor"],
+                                description="Lo que la persona acaba de decir en este paso (opcional): "
+                                            "«estoy cansada», «tengo calor», «me estoy mareando», «ya estoy mejor»...")
+
+
+class PeticionMapa(BaseModel):
+    perfil: PerfilIn
+    contexto: Optional[dict] = Field(None, description="Contexto del paseo (estados dichos, mes, hora)")
+
+
+class PeticionVolver(BaseModel):
+    perfil: PerfilIn
+    lat: float
+    lon: float
+    contexto: Optional[dict] = Field(None, description="Contexto del paseo (incluye 'casa')")
+
+
 class PeticionChat(BaseModel):
     texto: str = Field(..., min_length=1, max_length=500, examples=["Estoy cansada y necesito un banco"])
     lat: float = Field(..., description="Latitud exacta actual del usuario (OBLIGATORIA)")
     lon: float = Field(..., description="Longitud exacta actual del usuario (OBLIGATORIA)")
     perfil_actual: Optional[PerfilIn] = Field(None, description="Perfil actualmente guardado en la interfaz")
+    contexto: Optional[dict] = Field(None, description="Contexto del paseo en curso (de /acompanar)")
 
 
 # ---------------------------------------------------------------- endpoints
@@ -129,6 +161,7 @@ def capa(nombre: str):
         raise HTTPException(status_code=404, detail=f"Capa desconocida. Opciones: {sorted(CAPAS)}")
     return FileResponse(DATOS / f"chamberi_{nombre}.geojson", media_type="application/geo+json")
 
+
 @app.get("/ambiente")
 def ambiente(mes: Optional[int] = None, hora: Optional[int] = None):
     """Polen del mes y calidad del aire de esa hora en Chamberí (datos reales de Oracle).
@@ -143,13 +176,69 @@ def ambiente(mes: Optional[int] = None, hora: Optional[int] = None):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@app.post("/acompanar")
+def acompanar(peticion: PeticionAcompanar):
+    """Acompañamiento libre (sin destino): devuelve como mucho UN aviso útil para este paso,
+    con su motivo y la fuente de datos, más el contexto actualizado para el paso siguiente."""
+    perfil = Perfil(**peticion.perfil.model_dump())
+    estado, urgencia, analisis = None, False, None
+    if peticion.dice:
+        # El LLM solo INTERPRETA lo dicho; qué recomendar lo deciden los datos
+        analisis = analizar_mensaje_llm(peticion.dice)
+        urgencia = analisis.intencion == "alerta_salud"
+        estado = analisis.estado or ("cansado" if analisis.cansado else None)
+    r = acompanante.paso(peticion.lat, peticion.lon, perfil, peticion.contexto,
+                         lat_antes=peticion.lat_antes, lon_antes=peticion.lon_antes,
+                         estado=estado, urgencia=urgencia)
+    if analisis is not None:
+        r["entendido"] = {"intencion": analisis.intencion, "estado": estado,
+                          "tipo_recurso": analisis.tipo_recurso}
+        if analisis.intencion == "volver":
+            try:
+                r["vuelta"] = acompanante.volver(peticion.lat, peticion.lon, perfil, r["contexto"])
+            except (ValueError, nx.NetworkXNoPath):
+                r["vuelta"] = None
+        elif analisis.intencion == "buscar_recurso" and analisis.tipo_recurso:
+            try:
+                r["recurso"] = motor.mas_cercano(peticion.lat, peticion.lon, analisis.tipo_recurso)
+            except ValueError:
+                r["recurso"] = None
+    return r
+
+
+@app.post("/mapa_personal")
+def mapa_personal(peticion: PeticionMapa):
+    """GeoJSON de las calles con su idoneidad 0-100 y categoría (apta / regular / no apta)
+    PARA ESTE PERFIL y lo que ha dicho en el paseo. El mismo barrio cambia según la persona."""
+    perfil = Perfil(**peticion.perfil.model_dump())
+    return acompanante.mapa_personal(perfil, peticion.contexto)
+
+
+@app.post("/volver")
+def volver(peticion: PeticionVolver):
+    """«Quiero volver»: ruta adaptada al perfil hasta casa (inicio del paseo) y transporte más cercano."""
+    perfil = Perfil(**peticion.perfil.model_dump())
+    try:
+        return acompanante.volver(peticion.lat, peticion.lon, perfil, peticion.contexto)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except nx.NetworkXNoPath:
+        raise HTTPException(status_code=404, detail="No hay un camino peatonal de vuelta.")
+
+
+@app.get("/paseo_demo")
+def paseo_demo_endpoint(paso_m: int = 15):
+    """Puntos [lat, lon] de un paseo real por Chamberí para simular el acompañamiento en pantalla."""
+    return {"puntos": paseo_demo(motor, paso_m), "paso_m": paso_m}
+
+
 @app.post("/chat")
 def chat_interactivo(peticion: PeticionChat):
     """Endpoint de lenguaje natural: interpreta intención y delega en el motor determinista."""
-    
+
     # 1. Analizar el mensaje con el LLM (Structured Outputs)
     analisis = analizar_mensaje_llm(peticion.texto)
-    
+
     # 2. RAMA 1: Alerta de Salud (Respuesta de seguridad inmediata)
     if analisis.intencion == "alerta_salud":
         return {
@@ -158,12 +247,29 @@ def chat_interactivo(peticion: PeticionChat):
             "accion_ui": "mostrar_alerta_urgencia"
         }
 
+    # RAMA: «Quiero volver» -> ruta de vuelta adaptada (acompañamiento libre)
+    if analisis.intencion == "volver":
+        datos = peticion.perfil_actual.model_dump() if peticion.perfil_actual else {}
+        if analisis.cansado:
+            datos["cansado"] = True
+        try:
+            vuelta = acompanante.volver(peticion.lat, peticion.lon, Perfil(**datos), peticion.contexto)
+        except (ValueError, nx.NetworkXNoPath) as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return {
+            "intencion": "volver",
+            "respuesta": vuelta["explicacion"],
+            "ruta": vuelta["ruta_recomendada"],
+            "alternativa_transporte": vuelta["alternativa_transporte"],
+            "accion_ui": "mostrar_ruta_vuelta",
+        }
+
     # 3. RAMA 2: Búsqueda de Recursos Específicos (/atajo)
     elif analisis.intencion == "buscar_recurso" and analisis.tipo_recurso:
         try:
             recurso = motor.mas_cercano(peticion.lat, peticion.lon, analisis.tipo_recurso)
             nombre = recurso.get("nombre") or f"un punto de {analisis.tipo_recurso}"
-            
+
             respuesta_texto = (
                 f"He localizado {nombre} a unos {recurso['distancia_m']} metros de tu ubicación "
                 f"(aproximadamente {recurso['minutos']} minutos a pie)."
@@ -182,7 +288,7 @@ def chat_interactivo(peticion: PeticionChat):
     elif analisis.intencion == "calcular_ruta":
         # Preservar el perfil guardado o usar uno base sin sobrescribir valores existentes
         perfil_base = peticion.perfil_actual.model_dump() if peticion.perfil_actual else {}
-        
+
         # Aplicar solo las modificaciones indicadas en la frase
         if analisis.cuestas: perfil_base["cuestas"] = analisis.cuestas
         if analisis.descanso: perfil_base["descanso"] = analisis.descanso
@@ -199,11 +305,24 @@ def chat_interactivo(peticion: PeticionChat):
 
     # 5. RAMA 4: Estado de Fatiga / Conversación General
     else:
+        # Dice cómo se encuentra (calor, mareo, piernas, mejor): responde el acompañante con datos
+        if analisis.estado and analisis.estado != "cansado":
+            datos = peticion.perfil_actual.model_dump() if peticion.perfil_actual else {}
+            r = acompanante.paso(peticion.lat, peticion.lon, Perfil(**datos), peticion.contexto,
+                                 estado=analisis.estado)
+            return {
+                "intencion": "estado",
+                "estado": analisis.estado,
+                "respuesta": r["aviso"]["mensaje"] if r["aviso"] else "De acuerdo, sigo pendiente.",
+                "detalle": r["aviso"],
+                "contexto": r["contexto"],
+                "accion_ui": "mostrar_aviso_acompanante",
+            }
         if analisis.cansado:
             perfil_base = peticion.perfil_actual.model_dump() if peticion.perfil_actual else {}
             perfil_base["cansado"] = True
             perfil_base["descanso"] = "mucho"
-            
+
             return {
                 "intencion": "conversacion_general",
                 "respuesta": "He actualizado tus prioridades: priorizaré rutas más llanas, con descansos frecuentes y transporte cercano.",
@@ -211,7 +330,7 @@ def chat_interactivo(peticion: PeticionChat):
                 "sugerencias_botones": ["Buscar banco cercano", "Elegir destino en mapa"],
                 "accion_ui": "actualizar_perfil_contexto"
             }
-            
+
         return {
             "intencion": "conversacion_general",
             "respuesta": "Hola, soy tu acompañante urbano por Chamberí. Puedo buscarte el banco o farmacia más cercana, o sugerirte un camino adaptado.",
