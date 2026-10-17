@@ -158,8 +158,8 @@ if fu is not None:
     xcol = next(c for c in fu.columns if c.upper().startswith("COORD_GIS_X") or c.upper() == "X")
     ycol = next(c for c in fu.columns if c.upper().startswith("COORD_GIS_Y") or c.upper() == "Y")
     fu = puntos(fu, xcol, ycol, "EPSG:25830")
-    fu = fu[fu.within(zona_ampliada)]
-    poi.append(gpd.GeoDataFrame({"poi_id": "FUENTE_" + fu.index.astype(str), "tipo": "fuente",
+    fu = fu[fu.within(zona_ampliada)].reset_index(drop=True)
+    poi.append(gpd.GeoDataFrame({"poi_id": "FUENTE_" + fu["ID"].astype(str) if "ID" in fu.columns else "FUENTE_" + pd.Series(fu.index.astype(str), index=fu.index), "tipo": "fuente",
                                  "nombre": "Fuente de agua", "fuente_id": "AYTO_FUENTES",
                                  "accesible": None, "especie": None}, geometry=fu.geometry, crs=CRS_M))
 
@@ -167,15 +167,19 @@ ar = leer_csv("arbolado.csv")
 if ar is not None:
     xcol = next(c for c in ar.columns if c.upper().startswith("COORD_GIS_X") or c.upper() == "X")
     ycol = next(c for c in ar.columns if c.upper().startswith("COORD_GIS_Y") or c.upper() == "Y")
-    ecol = next((c for c in ar.columns if "ESPECIE" in c.upper()), None)
+    # "ESPECIE" (nombre científico) y no "CODIGO_ESPECIE" (código de 3 letras)
+    ecol = next((c for c in ar.columns if c.upper() == "ESPECIE"),
+                next((c for c in ar.columns if "ESPECIE" in c.upper()), None))
     ar = puntos(ar, xcol, ycol, "EPSG:25830")
-    ar = ar[ar.within(zona_ampliada)]
-    poi.append(gpd.GeoDataFrame({"poi_id": "ARBOL_" + ar.index.astype(str), "tipo": "arbol",
+    ar = ar[ar.within(zona_ampliada)].reset_index(drop=True)
+    poi.append(gpd.GeoDataFrame({"poi_id": "ARBOL_" + (ar["ASSETNUM"].astype(str) if "ASSETNUM" in ar.columns else pd.Series(ar.index.astype(str), index=ar.index)), "tipo": "arbol",
                                  "nombre": None, "fuente_id": "AYTO_ARBOLADO", "accesible": None,
                                  "especie": ar[ecol] if ecol else None}, geometry=ar.geometry, crs=CRS_M))
 
 poi = gpd.GeoDataFrame(pd.concat(poi, ignore_index=True), crs=CRS_M)
 poi = poi.drop_duplicates(subset="poi_id")
+sin_geom = poi.geometry.isna() | poi.geometry.is_empty
+assert not sin_geom.any(), f"{sin_geom.sum()} recursos sin geometría: {poi.loc[sin_geom, 'tipo'].value_counts().to_dict()}"
 print("[2] Recursos:", poi["tipo"].value_counts().to_dict())
 
 # ---------------------------------------------------------------- 3. recursos junto al tramo
