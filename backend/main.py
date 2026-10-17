@@ -47,8 +47,8 @@ app.add_middleware(
 motor = Motor()
 
 Nivel = Literal["nada", "algo", "mucho"]
-TipoAtajo = Literal["banco", "farmacia", "metro", "bus", "transporte"]
-CAPAS = {"calles", "bancos", "farmacias", "metro", "bus"}
+TipoAtajo = Literal["banco", "farmacia", "fuente", "metro", "bus", "transporte"]
+CAPAS = {"calles", "bancos", "farmacias", "fuente", "metro", "bus"}
 
 
 # ---------------------------------------------------------------- modelos de datos

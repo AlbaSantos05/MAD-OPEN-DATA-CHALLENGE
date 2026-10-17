@@ -13,7 +13,7 @@ class IntencionUsuario(BaseModel):
     intencion: Literal["buscar_recurso", "calcular_ruta", "alerta_salud", "conversacion_general"] = Field(
         ..., description="Propósito principal detectado en el mensaje."
     )
-    tipo_recurso: Optional[Literal["banco", "farmacia", "metro", "bus", "transporte"]] = Field(
+    tipo_recurso: Optional[Literal["banco", "farmacia", "fuente", "metro", "bus", "transporte"]] = Field(
         None, description="Especifica el tipo si la intención es buscar_recurso."
     )
     cuestas: Optional[Literal["nada", "algo", "mucho"]] = Field(
@@ -43,6 +43,7 @@ Reglas estrictas de clasificación:
 2. BÚSQUEDA DE RECURSOS ESPECÍFICOS:
    - Pedir banco, asiento o lugar para sentarse -> intencion="buscar_recurso", tipo_recurso="banco".
    - Pedir farmacia o comprar medicinas de forma explícita -> intencion="buscar_recurso", tipo_recurso="farmacia".
+   - Pedir fuente, agua o beber -> intencion="buscar_recurso", tipo_recurso="fuente".  
    - Pedir autobús, EMT o parada -> intencion="buscar_recurso", tipo_recurso="bus".
    - Pedir metro o boca de metro -> intencion="buscar_recurso", tipo_recurso="metro".
 3. CÁLCULO DE RUTA:
@@ -99,6 +100,8 @@ def analizar_mensaje_llm(texto_usuario: str) -> IntencionUsuario:
         )
     elif any(p in txt for p in ["farmacia", "medicin", "remedio"]):
         return IntencionUsuario(intencion="buscar_recurso", tipo_recurso="farmacia")
+    elif any(p in txt for p in ["fuente", "agua", "beber"]):
+        return IntencionUsuario(intencion="buscar_recurso", tipo_recurso="fuente")
     elif any(p in txt for p in ["bus", "autobús", "emt"]):
         return IntencionUsuario(intencion="buscar_recurso", tipo_recurso="bus")
     elif "metro" in txt:
