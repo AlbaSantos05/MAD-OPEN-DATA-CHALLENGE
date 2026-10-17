@@ -1,7 +1,7 @@
 -- =====================================================================
 -- 06 · Publica las tablas de polen en la API de solo lectura (módulo 'dataset' del 05)
 -- Ejecutar como MADDATA en Database Actions, DESPUÉS de cargar los datos con
--- pipelines/cargar_polen.py. Se puede repetir sin problema.
+-- pipelines/cargar_ambiental.py. Se puede repetir sin problema.
 --
 --   GET .../dataset/polen/            -> calendario de polen por tipo y mes
 --   GET .../dataset/polen/?mes=3      -> solo un mes
@@ -24,7 +24,8 @@ BEGIN
 END;
 /
 
--- Comprobaciones (resultado esperado en el comentario)
-SELECT COUNT(*) FROM polen_mes;                                  -- 135
-SELECT COUNT(*) FROM especie_polen;                              -- 68
-SELECT nivel, COUNT(*) FROM polen_mes GROUP BY nivel;            -- bajo 115, medio 9, alto 11
+-- Comprobaciones. Resultado esperado: 180, 68 y bajo 159 / medio 9 / alto 12.
+-- (Los comentarios van en su propia línea: al final de una sentencia, SQL Scripts de APEX da ORA-03405.)
+SELECT COUNT(*) FROM polen_mes;
+SELECT COUNT(*) FROM especie_polen;
+SELECT nivel, COUNT(*) FROM polen_mes GROUP BY nivel;

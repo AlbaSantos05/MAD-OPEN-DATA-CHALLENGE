@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from typing import Optional
 
 from backend.llm_service import analizar_mensaje_llm
+from backend.ambiental import aviso_ambiental
 from backend.profiles import Perfil
 
 # Para poder importar recommendation.py y profiles.py estando en backend/
@@ -127,6 +128,20 @@ def capa(nombre: str):
     if nombre not in CAPAS:
         raise HTTPException(status_code=404, detail=f"Capa desconocida. Opciones: {sorted(CAPAS)}")
     return FileResponse(DATOS / f"chamberi_{nombre}.geojson", media_type="application/geo+json")
+
+@app.get("/ambiente")
+def ambiente(mes: Optional[int] = None, hora: Optional[int] = None):
+    """Polen del mes y calidad del aire de esa hora en Chamberí (datos reales de Oracle).
+    Sin parámetros usa el mes y la hora actuales. Ej.: /ambiente?mes=3&hora=9"""
+    if mes is not None and not 1 <= mes <= 12:
+        raise HTTPException(status_code=400, detail="mes debe estar entre 1 y 12")
+    if hora is not None and not 0 <= hora <= 23:
+        raise HTTPException(status_code=400, detail="hora debe estar entre 0 y 23")
+    try:
+        return aviso_ambiental(mes, hora)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
 
 @app.post("/chat")
 def chat_interactivo(peticion: PeticionChat):
