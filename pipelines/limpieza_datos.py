@@ -147,14 +147,7 @@ try:
 except Exception as e:
     print(f"  -> Aviso en lectura de aire/polen: {e}")
 
-resumen_ambiental = {
-    "calidad_aire_indice": "Buena",
-    "nivel_polen": "Medio",
-    "fecha_actualizacion": "2026-10-16"
-}
-with open(OUT / "indicadores_ambientales.json", "w", encoding="utf-8") as f:
-    json.dump(resumen_ambiental, f, ensure_ascii=False, indent=2)
-
+# Los indicadores ambientales se calculan en pipelines/calcular_polen.py (datos reales).
 
 # 6. Exportar a GeoJSON (en WGS84 para Leaflet/Mapbox)
 print("[6/6] Exportando GeoJSONs finalizados...")
