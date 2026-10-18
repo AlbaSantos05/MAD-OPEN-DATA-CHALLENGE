@@ -31,6 +31,11 @@ def tipos(avisos):
     return [t for _, t, _ in avisos]
 
 
+def hay(avisos, palabra):
+    """¿Algún aviso de ese tipo o motivo? (los avisos de tramo son «barrera:cuesta», «incomodidad:polen»...)"""
+    return any(palabra in t for t in tipos(avisos))
+
+
 carmen = lambda: Perfil("Carmen", cuestas="mucho", descanso="mucho", escaleras=True, sensible_polen=True)  # noqa: E731
 antonio = lambda: Perfil("Antonio", transporte="algo")  # noqa: E731
 
@@ -40,14 +45,17 @@ av_c_oct, _ = simular(acomp, carmen(), puntos, mes=10, hora=17, verbose=False)
 
 print("Personalización")
 comprobar(len(av_c) > len(av_a), f"Carmen recibe más avisos que Antonio en el mismo paseo ({len(av_c)} vs {len(av_a)})")
-comprobar("cuesta" in tipos(av_c) and "cuesta" not in tipos(av_a), "Solo a Carmen se le avisa de cuestas")
-comprobar("polen" in tipos(av_c), "A Carmen (sensible al polen) se le avisa de polen en abril")
-comprobar("polen" not in tipos(av_a), "A Antonio (no sensible) no se le avisa de polen")
-comprobar("polen" not in tipos(av_c_oct), "En octubre no hay aviso de polen (el calendario no marca nivel medio/alto ese mes)")
+comprobar(hay(av_c, "barrera:cuesta") and not hay(av_a, "barrera:cuesta"), "Las cuestas son barrera (alerta) para Carmen y nunca para Antonio")
+comprobar(all(t == "incomodidad:cuesta" for t in tipos(av_a) if "cuesta" in t), "A Antonio solo se le mencionan las cuestas muy fuertes, con tono tranquilo")
+comprobar(hay(av_c, "polen"), "A Carmen (sensible al polen) se le avisa de polen en abril")
+comprobar(not hay(av_a, "polen"), "A Antonio (no sensible) no se le avisa de polen")
+comprobar(not hay(av_c_oct, "polen"), "En octubre no hay aviso de polen (el calendario no marca nivel medio/alto ese mes)")
+comprobar(hay(av_c, "barrera:") and all(t.split(":")[0] in ("barrera", "incomodidad") for t in tipos(av_c) if ":" in t),
+          "Los avisos de la calle llevan su nivel: barrera (alerta) o incomodidad (tono tranquilo)")
 
 print("No es pesado")
-metros = [m for m, _, _ in av_c]
-comprobar(all(b - a >= 40 for a, b in zip(metros, metros[1:])), "Nunca dos avisos en menos de 40 m")
+seguidos = [(a, b) for a, b in zip(av_c, av_c[1:]) if b[1] != "barrera:escaleras"]
+comprobar(all(b[0] - a[0] >= 40 for a, b in seguidos), "Nunca dos avisos en menos de 40 m (salvo unas escaleras)")
 comprobar(tipos(av_c).count("inicio") == 1, "El mensaje de inicio se da una sola vez")
 comprobar(len(av_c) <= ctx_c["metros_andados"] / 150 + 1, "Como media, no más de un aviso cada 150 m")
 
@@ -85,25 +93,29 @@ r_fin = acomp.paso(casa["lat"], casa["lon"], carmen(), r["contexto"], *puntos[1]
 comprobar(r_fin["aviso"]["tipo"] == "llegada" and "destino" not in r_fin["contexto"],
           "Al llegar avisa y vuelve al paseo libre")
 
-print("Zonas personales (idoneidad)")
+print("Clasificación personal de los tramos")
 ctx_abril = {"mes": 4, "hora": 17}
-idc = acomp.idoneidad(carmen(), ctx_abril)
-ida = acomp.idoneidad(antonio(), ctx_abril)
+idc = acomp.clasificar(carmen(), ctx_abril)
+ida = acomp.clasificar(antonio(), ctx_abril)
 no_c, no_a = (idc["categoria"] == "no apta").sum(), (ida["categoria"] == "no apta").sum()
 comprobar(no_c > 100 and no_a < no_c / 5, f"El mismo barrio tiene más zonas no aptas para Carmen que para Antonio ({no_c} vs {no_a})")
 esc = motor.calles.index[motor.calles["escalera"]]
-comprobar(len(esc) == 0 or (idc.loc[esc, "idoneidad"] == 0).all(), "Un tramo con escaleras es no apto para quien las evita")
+comprobar(len(esc) == 0 or (idc.loc[esc, "categoria"] == "no apta").all(), "Un tramo con escaleras es rojo para quien las evita")
+comprobar((ida.loc[esc, "categoria"] != "no apta").all(), "…y no para quien no las evita")
+llano = motor.calles.index[(motor.calles["pendiente_pct"] == 0) & ~motor.calles["escalera"]]
+comprobar((idc.loc[llano, "categoria"] != "no apta").all(), "Una calle llana y sin escaleras nunca es roja (el polen o los bancos son amarillo)")
 empinado = motor.calles["pendiente_pct"].idxmax()
 mot = [m["factor"] for m in acomp.motivos(empinado, idc, 4)]
 comprobar("cuesta" in mot, "La zona no apta explica su motivo con el dato (cuesta)")
 z = acomp.paso(*puntos[40], carmen(), ctx_abril)["zona"]
-comprobar({"idoneidad_aqui", "no_aptas_cerca", "radio_m"} <= set(z), "Cada paso devuelve lo que ve el radar alrededor")
-comprobar("zona_actual" in tipos(av_c) or "zona_delante" in tipos(av_c), "Durante el paseo de Carmen salta algún aviso de zona poco adecuada")
+comprobar({"categoria_aqui", "motivos_aqui", "no_aptas_cerca", "radio_m"} <= set(z), "Cada paso devuelve cómo es su calle y lo rojo alrededor")
 
 print("Lo que dice durante el paseo")
+orden = {"apta": 0, "regular": 1, "no apta": 2}
 for estado in ("calor", "mareo", "dolor_piernas"):
-    id_e = acomp.idoneidad(carmen(), {**ctx_abril, "estados": [estado]})
-    comprobar((id_e["idoneidad"] < idc["idoneidad"]).sum() > 100, f"Decir «{estado}» recalcula las zonas (más exigentes)")
+    id_e = acomp.clasificar(carmen(), {**ctx_abril, "estados": [estado]})
+    peor = (id_e["categoria"].map(orden) > idc["categoria"].map(orden)).sum()
+    comprobar(peor > 100, f"Decir «{estado}» recalcula los tramos (más exigentes: {peor} empeoran)")
 ctx_m = acomp.paso(*puntos[30], carmen(), ctx_abril)["contexto"]
 r = acomp.paso(*puntos[31], carmen(), ctx_m, *puntos[30], estado="mareo")
 comprobar(r["aviso"]["tipo"] == "reaccion" and "112" in r["aviso"]["mensaje"], "«Me estoy mareando» -> respuesta inmediata: sentarse y, si va a más, 112")

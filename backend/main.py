@@ -246,7 +246,7 @@ def ir_a(peticion: PeticionIrA):
 
 @app.post("/mapa_personal")
 def mapa_personal(peticion: PeticionMapa):
-    """GeoJSON de las calles con su idoneidad 0-100 y categoría (apta / regular / no apta)
+    """GeoJSON de las calles con su categoría (apta / regular / no apta) y sus motivos
     PARA ESTE PERFIL y lo que ha dicho en el paseo. El mismo barrio cambia según la persona."""
     perfil = Perfil(**peticion.perfil.model_dump())
     return acompanante.mapa_personal(perfil, peticion.contexto)
