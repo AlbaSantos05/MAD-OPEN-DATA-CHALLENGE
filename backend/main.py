@@ -114,6 +114,22 @@ class PeticionVolver(BaseModel):
     contexto: Optional[dict] = Field(None, description="Contexto del paseo (incluye 'casa')")
 
 
+class Destino(BaseModel):
+    lat: float
+    lon: float
+    nombre: Optional[str] = Field(None, examples=["Farmacia en Calle de Feijoo, 12"])
+    tipo: Optional[str] = Field(None, examples=["farmacia"])
+
+
+class PeticionIrA(BaseModel):
+    """Empezar a guiar hacia un sitio (modo destino). Los pasos siguientes de /acompanar recalculan la ruta."""
+    perfil: PerfilIn
+    lat: float
+    lon: float
+    destino: Destino
+    contexto: Optional[dict] = Field(None, description="Contexto del paseo en curso (de /acompanar)")
+
+
 class PeticionChat(BaseModel):
     texto: str = Field(..., min_length=1, max_length=500, examples=["Estoy cansada y necesito un banco"])
     lat: float = Field(..., description="Latitud exacta actual del usuario (OBLIGATORIA)")
@@ -131,10 +147,11 @@ def salud():
 
 @app.post("/ruta")
 def ruta(peticion: PeticionRuta):
-    """Ruta recomendada entre dos puntos según el perfil, con su explicación."""
+    """Ruta MÁS CORTA andando entre dos puntos, descrita en palabras para este perfil.
+    No se elige por la persona un camino más largo: el acompañante avisa por el camino y ella decide."""
     perfil = Perfil(**peticion.perfil.model_dump())
     try:
-        return motor.recomendar_ruta(
+        return motor.ruta(
             (peticion.origen.lat, peticion.origen.lon),
             (peticion.destino.lat, peticion.destino.lon),
             perfil,
@@ -196,14 +213,35 @@ def acompanar(peticion: PeticionAcompanar):
         if analisis.intencion == "volver":
             try:
                 r["vuelta"] = acompanante.volver(peticion.lat, peticion.lon, perfil, r["contexto"])
+                r["contexto"] = r["vuelta"]["contexto"]            # a partir de aquí: modo destino (casa)
             except (ValueError, nx.NetworkXNoPath):
                 r["vuelta"] = None
         elif analisis.intencion == "buscar_recurso" and analisis.tipo_recurso:
             try:
                 r["recurso"] = motor.mas_cercano(peticion.lat, peticion.lon, analisis.tipo_recurso)
-            except ValueError:
-                r["recurso"] = None
+                # Y le guía hasta allí (ruta más corta, recalculada en cada paso)
+                ida = acompanante.ir_a(peticion.lat, peticion.lon, perfil, r["contexto"],
+                                       {**r["recurso"], "tipo": r["recurso"].get("tipo") or analisis.tipo_recurso})
+                r["ruta_destino"] = ida
+                r["contexto"] = ida["contexto"]
+            except (ValueError, nx.NetworkXNoPath):
+                r["recurso"] = r.get("recurso")
     return r
+
+
+@app.post("/ir_a")
+def ir_a(peticion: PeticionIrA):
+    """Modo destino: ruta MÁS CORTA andando hasta el sitio elegido (p. ej. el banco de un atajo).
+    Devuelve el contexto con el destino; en cada paso, /acompanar recalcula la ruta desde donde esté
+    la persona (si se desvía, se adapta), sigue dando los mismos avisos que en el paseo libre y avisa al llegar."""
+    perfil = Perfil(**peticion.perfil.model_dump())
+    try:
+        return acompanante.ir_a(peticion.lat, peticion.lon, perfil, peticion.contexto,
+                                peticion.destino.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except nx.NetworkXNoPath:
+        raise HTTPException(status_code=404, detail="No hay un camino peatonal hasta ese sitio.")
 
 
 @app.post("/mapa_personal")
@@ -216,7 +254,7 @@ def mapa_personal(peticion: PeticionMapa):
 
 @app.post("/volver")
 def volver(peticion: PeticionVolver):
-    """«Quiero volver»: ruta adaptada al perfil hasta casa (inicio del paseo) y transporte más cercano."""
+    """«Quiero volver»: ruta más corta andando hasta el inicio del paseo (modo destino) y transporte cercano."""
     perfil = Perfil(**peticion.perfil.model_dump())
     try:
         return acompanante.volver(peticion.lat, peticion.lon, perfil, peticion.contexto)
@@ -259,8 +297,9 @@ def chat_interactivo(peticion: PeticionChat):
         return {
             "intencion": "volver",
             "respuesta": vuelta["explicacion"],
-            "ruta": vuelta["ruta_recomendada"],
+            "ruta": vuelta["ruta"],
             "alternativa_transporte": vuelta["alternativa_transporte"],
+            "contexto": vuelta["contexto"],
             "accion_ui": "mostrar_ruta_vuelta",
         }
 

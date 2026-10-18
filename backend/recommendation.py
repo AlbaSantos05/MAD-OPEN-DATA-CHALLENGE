@@ -198,7 +198,8 @@ class Motor:
         c["length"] = c["length_m"].astype(float)
         c["pendiente_pct"] = c["slope_pct"].fillna(0).astype(float)
         c["escalera"] = c["steps"] == "si"
-        c["nombre"] = c["nombre_via"]
+        # Algunos tramos del dataset traen dos calles pegadas ("Calle A' 'Calle B"): nos quedamos con la primera
+        c["nombre"] = c["nombre_via"].where(c["nombre_via"].isna(), c["nombre_via"].astype(str).str.split("' '").str[0])
         c["bancos"] = c["benches_20m"].fillna(0).astype(int)
         c["dist_transporte"] = c["dist_transport_m"].astype(float)
         self.calles = c.set_index("tramo_id", drop=False)
@@ -267,41 +268,31 @@ class Motor:
             raise ValueError(f"El punto ({lat}, {lon}) está fuera de la zona del prototipo (Chamberí).")
         return int(self.nodos.loc[i, "id"])
 
-    # ---------- coste multicriterio
-    def _costes(self, pesos):
-        """Coste de cada tramo = longitud x (1 + penalizaciones según el perfil)."""
-        c = self.calles
-        f_cuesta = c["pendiente_pct"] / 5                         # 5 % de pendiente duplica el coste con peso 1
-        f_descanso = 1 / (1 + c["bancos"])                        # 1 si no hay bancos, baja cuantos más haya
-        f_transporte = (c["dist_transporte"] / 300).clip(upper=1)  # lejos (>300 m) = penalización máxima
-        f_escalera = c["escalera"].astype(float)
-        num_arboles = c.get("trees_20m", pd.Series(0, index=c.index)).fillna(0)
-        f_arbolado = 1 / (1 + num_arboles)          # menos árboles a 20 m = más coste (no implica sombra)
-        p_arbolado = pesos.get("arbolado", 0.0)
-        factor = (
-            1
-            + pesos["cuesta"] * f_cuesta
-            + pesos["descanso"] * f_descanso
-            + pesos["transporte"] * f_transporte
-            + pesos["escaleras"] * f_escalera
-            + p_arbolado * f_arbolado
-        )
-        return c["length"] * factor
+    # ---------- rutas: siempre la más corta ANDANDO
+    # El motor no elige por la persona un camino «más adecuado» y más largo: da el más corto, y el
+    # acompañante avisa por el camino (cuestas, escaleras...) y ofrece alternativas diciendo cuánto
+    # alargan. La persona decide. Si se desvía, el acompañante recalcula la ruta en cada paso.
+    def distancias_a(self, nodo):
+        """Metros andando desde cualquier cruce hasta `nodo` (la red es de doble sentido).
+        Se guarda por destino: mientras la persona va hacia él, cada paso solo consulta la tabla."""
+        cache = self.__dict__.setdefault("_cache_destinos", {})
+        if nodo not in cache:
+            if len(cache) > 32:
+                cache.clear()
+            cache[nodo] = nx.single_source_dijkstra_path_length(self.G, nodo, weight="largo")
+        return cache[nodo]
 
-    def _ruta(self, origen, destino, costes):
-        coste = costes.to_dict()
-
-        def peso(u, v, aristas):
-            return min(coste[a["idx"]] for a in aristas.values())
-
-        nodos = nx.shortest_path(self.G, origen, destino, weight=peso)
-        return [
-            min(self.G[a][b].values(), key=lambda e: coste[e["idx"]])["idx"]
-            for a, b in zip(nodos, nodos[1:])
-        ]
+    def camino_corto(self, nodo_origen, nodo_destino):
+        """Tramos (en orden) del camino más corto andando entre dos cruces."""
+        nodos = nx.shortest_path(self.G, nodo_origen, nodo_destino, weight="largo")
+        return [min(self.G[a][b].values(), key=lambda e: e["largo"])["idx"] for a, b in zip(nodos, nodos[1:])]
 
     # ---------- descripción de una ruta
     def _resumen(self, idxs):
+        if not idxs:
+            return {"longitud_m": 0, "minutos": 0, "metros_en_cuesta": 0, "pendiente_max": 0.0, "escaleras": 0,
+                    "bancos": 0, "zonas_descanso": 0, "metros_por_zona": None, "max_sin_banco_m": 0,
+                    "dist_max_transporte_m": 0, "calles": [], "coordenadas": []}
         t = self.calles.loc[idxs]
         longitud = float(t["length"].sum())
         trazado = unary_union(list(t.geometry))
@@ -342,67 +333,46 @@ class Motor:
             "coordenadas": lineas,  # para pintar la ruta en el mapa del frontend
         }
 
-    def _explicar(self, perfil, corta, reco, misma):
-        desc = f"Son unos {reco['longitud_m']} metros, unos {reco['minutos']} minutos a paso tranquilo"
-        if reco["calles"]:
-            desc += ", por " + _enumerar(reco["calles"])
-        desc += "."
-
-        pesos = perfil.pesos()
-        if misma:
-            texto = f"{perfil.nombre}, el camino más directo ya te viene bien. {desc}"
-        else:
-            # Solo mencionamos motivos relacionados con lo que le importa a esta persona
-            # y que supongan una diferencia apreciable
-            motivos = []
-            if pesos["cuesta"] > 0 and corta["metros_en_cuesta"] - reco["metros_en_cuesta"] >= 20:
-                motivos.append(f"tiene mucha menos cuesta ({reco['metros_en_cuesta']} m frente a {corta['metros_en_cuesta']} m)")
-            if pesos["descanso"] > 0 and corta["max_sin_banco_m"] - reco["max_sin_banco_m"] >= 30:
-                motivos.append(f"como mucho andarás {reco['max_sin_banco_m']} m seguidos sin un banco al lado "
-                               f"(en el camino directo, hasta {corta['max_sin_banco_m']} m)")
-            if pesos["escaleras"] > 0 and reco["escaleras"] < corta["escaleras"]:
-                motivos.append("evita escaleras")
-            if pesos["transporte"] > 0 and corta["dist_max_transporte_m"] - reco["dist_max_transporte_m"] >= 50:
-                motivos.append("pasa más cerca del metro y el autobús")
-            if not motivos:
-                motivos.append("se adapta mejor a lo que necesitas")
-
-            extra = reco["longitud_m"] - corta["longitud_m"]
-            if extra <= 10:
-                inicio = "te sugiero un camino casi igual de largo que el más directo, pero que"
-            else:
-                inicio = f"te sugiero un camino {extra} metros más largo que el más directo, pero que"
-            texto = f"{perfil.nombre}, {inicio} {_enumerar(motivos)}. {desc}"
-
-        if reco["zonas_descanso"]:
-            texto += (f" Por el camino pasarás por {reco['zonas_descanso']} sitios donde sentarte"
-                      f" (uno cada {reco['metros_por_zona']} metros, más o menos).")
+    def _describir(self, r, perfil=None):
+        """La ruta en palabras, con lo que le importa a esta persona (sin elegir por ella)."""
+        texto = f"Son unos {r['longitud_m']} metros, unos {r['minutos']} minutos a paso tranquilo"
+        if r["calles"]:
+            texto += ", por " + _enumerar(r["calles"])
+        texto += "."
+        avisos = []
+        if perfil is not None and (perfil.cuestas != "nada" or perfil.cansado) and r["metros_en_cuesta"] >= 20:
+            avisos.append(f"hay unos {r['metros_en_cuesta']} m de cuesta (hasta un {r['pendiente_max']:.0f} %)")
+        if perfil is not None and perfil.escaleras and r["escaleras"]:
+            avisos.append("hay escaleras" if r["escaleras"] > 1 else "hay un tramo de escaleras")
+        if avisos:
+            texto += f" Por el camino {_enumerar(avisos)}: te avisaré antes de llegar y te diré cómo evitarlo."
+        if r["zonas_descanso"]:
+            texto += (f" Pasarás por {r['zonas_descanso']} sitios donde sentarte"
+                      f" (uno cada {r['metros_por_zona']} metros, más o menos).")
+        if perfil is not None and perfil.nombre and perfil.nombre != "Usuario":
+            texto = f"{perfil.nombre}, {texto[0].lower()}{texto[1:]}"
         return texto
 
     # ---------------------------------------------------------------- API pública
-    def recomendar_ruta(self, origen, destino, perfil):
-        """origen y destino como (lat, lon). Devuelve la ruta recomendada, la más corta y la explicación."""
+    def ruta(self, origen, destino, perfil=None):
+        """origen y destino como (lat, lon). Ruta MÁS CORTA andando, descrita en palabras, y la parada
+        de transporte más cercana al destino."""
         o = self._nodo_cercano(*origen)
         d = self._nodo_cercano(*destino)
-
-        idx_corta = self._ruta(o, d, self.calles["length"])
-        idx_reco = self._ruta(o, d, self._costes(perfil.pesos()))
-        misma = idx_corta == idx_reco
-        corta, reco = self._resumen(idx_corta), self._resumen(idx_reco)
-
-        explicacion = self._explicar(perfil, corta, reco, misma)
+        r = self._resumen(self.camino_corto(o, d)) if o != d else self._resumen([])
+        # Más el trozo de la persona al primer cruce y del último cruce al destino
+        xy = dict(zip(self.nodos["id"], self.nodos.geometry))
+        acceso = _a_metros(*origen).distance(xy[o]) + _a_metros(*destino).distance(xy[d])
+        r["longitud_m"] = round(r["longitud_m"] + acceso)
+        r["minutos"] = max(1, round(r["longitud_m"] / VELOCIDAD))
+        explicacion = self._describir(r, perfil)
         parada = self.mas_cercano(*destino, "transporte")
         if parada["nombre"]:
-            explicacion += (
-                f" Al llegar tienes la parada de {parada['tipo']} {parada['nombre']} "
-                f"a {parada['distancia_m']} metros por si prefieres volver en transporte."
-            )
-
+            explicacion += (f" Al llegar tienes la parada de {parada['tipo']} {parada['nombre']} "
+                            f"a {parada['distancia_m']} metros por si prefieres volver en transporte.")
         return {
-            "perfil": perfil.nombre,
-            "misma_ruta": misma,
-            "ruta_recomendada": reco,
-            "ruta_mas_corta": corta,
+            "ruta": r,
+            "ruta_recomendada": r,          # mismo contenido: nombre que ya lee la interfaz
             "explicacion": explicacion,
             "parada_cercana_destino": parada,
         }
@@ -494,15 +464,12 @@ if __name__ == "__main__":
     ]
 
     for perfil in perfiles:
-        r = motor.recomendar_ruta(origen, destino, perfil)
+        r = motor.ruta(origen, destino, perfil)
+        s_ = r["ruta"]
         print("\n" + "=" * 70)
-        print(f"PERFIL: {perfil.nombre}   pesos: {perfil.pesos()}")
-        for etiqueta, clave in (("Ruta más corta  ", "ruta_mas_corta"), ("Ruta recomendada", "ruta_recomendada")):
-            s = r[clave]
-            print(f"{etiqueta}: {s['longitud_m']} m | en cuesta {s['metros_en_cuesta']} m | "
-                  f"pendiente máx {s['pendiente_max']} % | zonas descanso {s['zonas_descanso']} | "
-                  f"máx sin banco {s['max_sin_banco_m']} m | escaleras {s['escaleras']}")
-        print("\nExplicación:\n" + r["explicacion"])
+        print(f"PERFIL: {perfil.nombre}: {s_['longitud_m']} m | en cuesta {s_['metros_en_cuesta']} m | "
+              f"escaleras {s_['escaleras']} | zonas de descanso {s_['zonas_descanso']}")
+        print("Explicación:\n" + r["explicacion"])
 
     print("\n" + "=" * 70)
     print("ATAJOS desde la Glorieta de Bilbao:")

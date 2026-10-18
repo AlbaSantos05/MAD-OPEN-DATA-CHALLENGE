@@ -62,9 +62,28 @@ r2 = acomp.paso(*puntos[0], carmen(), {"mes": 4, "hora": 17})
 comprobar(r1["aviso"]["tipo"] == r2["aviso"]["tipo"] == "inicio", "Mismo paso y mismo contexto -> misma respuesta")
 comprobar("casa" in r1["contexto"], "El contexto guarda dónde empezó el paseo (casa)")
 
-print("Volver")
+print("Volver e ir a un sitio (modo destino)")
+import json  # noqa: E402
+import networkx as nx  # noqa: E402
 v = acomp.volver(*puntos[-1], Perfil("Carmen", cuestas="mucho", cansado=True), ctx_c)
-comprobar(v["ruta_recomendada"]["longitud_m"] > 0 and "alternativa_transporte" in v, "«Quiero volver» devuelve ruta adaptada y transporte")
+comprobar(v["ruta"]["longitud_m"] > 0 and "alternativa_transporte" in v, "«Quiero volver» devuelve la ruta y el transporte cercano")
+o, d = motor._nodo_cercano(*puntos[-1]), motor._nodo_cercano(ctx_c["casa"]["lat"], ctx_c["casa"]["lon"])
+corta = nx.shortest_path_length(motor.G, o, d, weight="largo")
+xy = dict(zip(motor.nodos["id"], motor.nodos.geometry))
+acceso = acomp._a_metros(*puntos[-1]).distance(xy[o]) + acomp._a_metros(ctx_c["casa"]["lat"], ctx_c["casa"]["lon"]).distance(xy[d])
+comprobar(abs(v["ruta"]["longitud_m"] - (corta + acceso)) <= 1, "La ruta es la MÁS CORTA andando (no se alarga por la persona)")
+comprobar(v["contexto"]["destino"]["tipo"] == "casa", "Volver deja el destino en el contexto: los pasos siguientes guían")
+ctx_v = v["contexto"]
+r = acomp.paso(*puntos[-1], carmen(), ctx_v)
+json.dumps(r)
+comprobar(r["destino"] and r["destino"]["metros_restantes"] > 0 and r["destino"]["coordenadas"], "Cada paso devuelve lo que falta y la línea hasta el destino")
+r_lejos = acomp.paso(*puntos[len(puntos) // 2], carmen(), r["contexto"], *puntos[-1])
+comprobar(abs(r_lejos["destino"]["metros_restantes"] - r["destino"]["metros_restantes"]) > 100,
+          "Si se mueve a otro sitio, la ruta se recalcula desde donde está")
+casa = ctx_c["casa"]
+r_fin = acomp.paso(casa["lat"], casa["lon"], carmen(), r["contexto"], *puntos[1])
+comprobar(r_fin["aviso"]["tipo"] == "llegada" and "destino" not in r_fin["contexto"],
+          "Al llegar avisa y vuelve al paseo libre")
 
 print("Zonas personales (idoneidad)")
 ctx_abril = {"mes": 4, "hora": 17}

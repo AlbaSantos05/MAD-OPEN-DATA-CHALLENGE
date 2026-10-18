@@ -21,20 +21,3 @@ class Perfil:
             valor = getattr(self, campo)
             if valor not in NIVELES:
                 raise ValueError(f"{campo} debe ser 'nada', 'algo' o 'mucho' (recibido: {valor})")
-
-    def pesos(self):
-        """Traduce el perfil a los pesos que usa el motor multicriterio."""
-        p = {
-            "cuesta": NIVELES[self.cuestas],
-            "descanso": NIVELES[self.descanso],
-            "transporte": NIVELES[self.transporte],
-            "arbolado": NIVELES[self.arbolado],
-            "escaleras": 10.0 if self.escaleras else 0.0,
-        }
-        # Si la persona dice que está cansada, sube temporalmente la importancia
-        # de descansar, evitar cuestas y tener transporte cerca (documento 1, apartado 4)
-        if self.cansado:
-            p["descanso"] += 1.0
-            p["cuesta"] += 1.0
-            p["transporte"] += 0.5
-        return p
