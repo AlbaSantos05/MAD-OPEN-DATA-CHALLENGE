@@ -53,7 +53,7 @@ Reglas estrictas de clasificación:
    - Pedir autobús, EMT o parada -> intencion="buscar_recurso", tipo_recurso="bus".
    - Pedir metro o boca de metro -> intencion="buscar_recurso", tipo_recurso="metro".
 3. VOLVER:
-   - "quiero volver", "llévame a casa", "me vuelvo", "regresar" -> intencion="volver".
+   - "quiero volver", "llévame a casa", "me vuelvo", "regresar", "me he perdido" -> intencion="volver".
 4. CÁLCULO DE RUTA:
    - Indicar deseo de ir a un sitio, caminar hacia una ubicación o calcular un trayecto -> intencion="calcular_ruta".
 5. ESTADO DE FATIGA / CANSANCIO:
@@ -110,7 +110,8 @@ def analizar_mensaje_llm(texto_usuario: str) -> IntencionUsuario:
     estado = _estado(txt, hay)
         
     # 2. Volver
-    if hay("volver", "vuelvo", "vuelta", "a casa", "regresar", "regreso"):
+    if hay("volver", "vuelvo", "vuelta", "a casa", "regresar", "regreso", "perdid", "no sé dónde estoy",
+           "no se donde estoy"):
         return IntencionUsuario(intencion="volver", estado=estado,
                                 cansado=hay("cansad", "agotad", "no puedo más"))
 

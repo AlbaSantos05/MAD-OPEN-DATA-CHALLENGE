@@ -510,6 +510,10 @@ class Acompanante:
         self._paso.rumbo = rumbo if p_antes is not None else None   # sin paso anterior no hay sentido
         zona = self._zona(p, idx, previsto, pen, ctx)
 
+        # Sin paso anterior no se sabe hacia dónde va: no se avisa de lo que hay «por delante»
+        sin_sentido = p_antes is None
+        direccionales = {self._r_escaleras, self._r_cuesta, self._r_zona_delante, self._r_polen, self._r_alejarse}
+
         candidatos = []
         if urgencia:
             candidatos.append(self._r_urgencia(perfil, ctx, p, self._paso.rumbo))
@@ -518,6 +522,8 @@ class Acompanante:
         for regla in (self._r_escaleras, self._r_cuesta, self._r_zona_actual, self._r_cansancio,
                       self._r_zona_delante, self._r_descanso, self._r_polen, self._r_alejarse,
                       self._r_agua, self._r_centro_salud, self._r_inicio):
+            if sin_sentido and regla in direccionales:
+                continue
             a = regla(perfil, ctx, idx, hacia, falta, ramas, previsto, presupuesto)
             if a:
                 candidatos.append(a)
@@ -1012,6 +1018,8 @@ class Acompanante:
         o la persona está cansada, ofrece también el transporte más cercano."""
         ctx = contexto or {}
         casa = ctx.get("casa") or {"lat": lat, "lon": lon}
+        # Lo dicho durante el paseo («estoy cansada», «me duelen las piernas») cuenta para la vuelta
+        perfil = self.perfil_efectivo(perfil, self.estados(perfil, ctx))
         perfil_vuelta = perfil
         resultado = self.m.recomendar_ruta((lat, lon), (casa["lat"], casa["lon"]), perfil_vuelta)
         t = self.m.mas_cercano(lat, lon, "transporte")

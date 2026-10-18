@@ -285,29 +285,27 @@ def chat_interactivo(peticion: PeticionChat):
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-    # 4. RAMA 3: Petición de Calcular Ruta (Se solicita selección de destino en mapa)
+    # 4. RAMA 3: ir a un sitio concreto. La interfaz no tiene selector de destino: se dice con claridad
     elif analisis.intencion == "calcular_ruta":
-        # Preservar el perfil guardado o usar uno base sin sobrescribir valores existentes
-        perfil_base = peticion.perfil_actual.model_dump() if peticion.perfil_actual else {}
-
-        # Aplicar solo las modificaciones indicadas en la frase
-        if analisis.cuestas: perfil_base["cuestas"] = analisis.cuestas
-        if analisis.descanso: perfil_base["descanso"] = analisis.descanso
-        if analisis.escaleras is not None: perfil_base["escaleras"] = analisis.escaleras
-        if analisis.transporte: perfil_base["transporte"] = analisis.transporte
-        if analisis.cansado: perfil_base["cansado"] = True
-
         return {
             "intencion": "calcular_ruta",
-            "respuesta": "Entendido. Selecciona tu destino en el mapa o elige un punto predefinido para calcular el mejor camino.",
-            "perfil_actualizado": perfil_base,
-            "accion_ui": "solicitar_destino_mapa"
+            "respuesta": ("Todavía no puedo llevarte a un sitio concreto. Sí puedo buscarte lo más cercano "
+                          "(un banco, una farmacia, un centro de salud, una fuente o el transporte), "
+                          "acompañarte en el paseo o llevarte de vuelta al punto de inicio."),
+            "accion_ui": "mostrar_opciones",
         }
 
     # 5. RAMA 4: Estado de Fatiga / Conversación General
     else:
-        # Dice cómo se encuentra (calor, mareo, piernas, mejor): responde el acompañante con datos
-        if analisis.estado and analisis.estado != "cansado":
+        # Dice cómo se encuentra (cansancio, calor, mareo, piernas): responde el acompañante con datos,
+        # igual que durante el paseo
+        estado = analisis.estado or ("cansado" if analisis.cansado else None)
+        if estado == "mejor":
+            return {"intencion": "estado", "estado": "mejor",
+                    "respuesta": "Me alegro mucho. Aquí sigo por si necesitas algo.",
+                    "accion_ui": "mostrar_aviso_acompanante"}
+        if estado:
+            analisis.estado = estado
             datos = peticion.perfil_actual.model_dump() if peticion.perfil_actual else {}
             r = acompanante.paso(peticion.lat, peticion.lon, Perfil(**datos), peticion.contexto,
                                  estado=analisis.estado)
@@ -319,19 +317,6 @@ def chat_interactivo(peticion: PeticionChat):
                 "contexto": r["contexto"],
                 "accion_ui": "mostrar_aviso_acompanante",
             }
-        if analisis.cansado:
-            perfil_base = peticion.perfil_actual.model_dump() if peticion.perfil_actual else {}
-            perfil_base["cansado"] = True
-            perfil_base["descanso"] = "mucho"
-
-            return {
-                "intencion": "conversacion_general",
-                "respuesta": "He actualizado tus prioridades: priorizaré rutas más llanas, con descansos frecuentes y transporte cercano.",
-                "perfil_actualizado": perfil_base,
-                "sugerencias_botones": ["Buscar banco cercano", "Elegir destino en mapa"],
-                "accion_ui": "actualizar_perfil_contexto"
-            }
-
         return {
             "intencion": "conversacion_general",
             "respuesta": "Hola, soy tu acompañante urbano por Chamberí. Puedo buscarte el banco, la farmacia o el centro de salud más cercano, o sugerirte un camino adaptado.",

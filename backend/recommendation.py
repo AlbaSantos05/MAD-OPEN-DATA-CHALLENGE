@@ -247,14 +247,14 @@ class Motor:
         c = self.calles
         self.G = nx.MultiDiGraph()
         coords = {}
-        for idx, u, v, k, geom in zip(c.index, c["u"], c["v"], c["key"], c.geometry):
+        for idx, u, v, k, geom, largo in zip(c.index, c["u"], c["v"], c["key"], c.geometry, c["length"]):
             u, v = int(u), int(v)
             puntos = list(geom.coords)
             coords.setdefault(u, puntos[0])
             coords.setdefault(v, puntos[-1])
-            self.G.add_edge(u, v, key=int(k), idx=idx)
+            self.G.add_edge(u, v, key=int(k), idx=idx, largo=float(largo))
             if getattr(self, "bidireccional", False):
-                self.G.add_edge(v, u, key=int(k), idx=idx)
+                self.G.add_edge(v, u, key=int(k), idx=idx, largo=float(largo))
         self.nodos = gpd.GeoDataFrame(
             {"id": list(coords)}, geometry=[Point(xy) for xy in coords.values()], crs=CRS_M
         )
@@ -407,6 +407,42 @@ class Motor:
             "parada_cercana_destino": parada,
         }
 
+    def _distancias_red(self, origen):
+        """Metros andando desde un cruce a todos los demás (hasta 3 km). En un mismo paso del paseo
+        se busca banco, transporte, fuente... desde el mismo cruce: se guardan los últimos."""
+        cache = self.__dict__.setdefault("_cache_red", {})
+        if origen not in cache:
+            if len(cache) > 64:
+                cache.clear()
+            cache[origen] = nx.single_source_dijkstra_path_length(self.G, origen, cutoff=3000, weight="largo")
+        return cache[origen]
+
+    def _mas_cercano_andando(self, p, capa, dist, candidatos=8):
+        """De los `candidatos` más cercanos en línea recta, el más cercano ANDANDO por la red peatonal
+        (una vía de tren o una manzana cerrada pueden convertir 50 m en línea recta en 400 andando).
+        Devuelve (índice, metros andando). Sin red cerca (fuera de la zona con datos): línea recta."""
+        cerca = dist.nsmallest(candidatos)
+        d_nodos = self.nodos.distance(p)
+        j = d_nodos.idxmin()
+        if d_nodos[j] > DIST_MAX_RED:
+            return cerca.index[0], float(cerca.iloc[0])
+        origen = int(self.nodos.loc[j, "id"])
+        red = self._distancias_red(origen)
+        mejor = (cerca.index[0], float(cerca.iloc[0]))
+        mejor_m = None
+        for i, recto in cerca.items():
+            g = capa.at[i, "geometry"]
+            dn = self.nodos.distance(g)
+            k = dn.idxmin()
+            nodo = int(self.nodos.loc[k, "id"])
+            if nodo not in red:
+                continue
+            # metros: de la persona a su cruce + red + del cruce al recurso (nunca menos que en línea recta)
+            m = max(float(recto), float(d_nodos[j]) + red[nodo] + float(dn[k]))
+            if mejor_m is None or m < mejor_m:
+                mejor, mejor_m = (i, m), m
+        return mejor
+
     def mas_cercano(self, lat, lon, tipo):
         """Atajos: tipo = 'banco', 'farmacia', 'fuente', 'metro', 'bus', 'transporte' o 'centro_salud'."""
         capas = {
@@ -425,15 +461,15 @@ class Motor:
             raise ValueError(f"No hay datos de {tipo.replace('_', ' ')}.")
         p = _a_metros(lat, lon)
         dist = capa.distance(p)
-        i = dist.idxmin()
+        i, metros = self._mas_cercano_andando(p, capa, dist)
         fila = capa.loc[i]
         pt = gpd.GeoSeries([fila.geometry], crs=CRS_M).to_crs(4326).iloc[0]
         nombre = _nombre_lugar(fila, tipo)
         r = {
             "tipo": fila["tipo"] if "tipo" in fila.index else tipo,
             "nombre": nombre,
-            "distancia_m": round(float(dist[i])),
-            "minutos": max(1, round(float(dist[i]) / VELOCIDAD)),
+            "distancia_m": round(metros),
+            "minutos": max(1, round(metros / VELOCIDAD)),
             "lat": pt.y,
             "lon": pt.x,
         }
