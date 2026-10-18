@@ -960,9 +960,16 @@ class Acompanante:
                               f"en la categoría «{cat}» del índice oficial (ICA).")
         if getattr(perfil, "sensible_polen", False):
             altos = sorted(t for (t, m), (niv, _) in self.polen_mes.items() if m == mes and niv == "alto")
+            medios = sorted(t for (t, m), (niv, _) in self.polen_mes.items() if m == mes and niv == "medio")
             if altos:
                 partes.append(f"En {MESES[mes - 1]} suele haber polen alto de: {', '.join(a.lower() for a in altos)}.")
+            elif medios:
+                partes.append(f"En {MESES[mes - 1]} el polen suele estar en nivel medio: {', '.join(a.lower() for a in medios)}.")
+            elif any(m == mes for (_, m) in self.polen_mes):
+                partes.append(f"En {MESES[mes - 1]} el polen suele estar bajo: no espero avisos de polen en este paseo.")
+            if altos or medios or any(m == mes for (_, m) in self.polen_mes):
                 fuentes.append(FUENTES_DATOS["polen"])
+                motivo["polen_mes"] = "alto" if altos else ("medio" if medios else "bajo")
         return {"tipo": "inicio", "mensaje": self._saludo(perfil, " ".join(partes)), "sugerencia": None,
                 "motivo": motivo, "fuentes": fuentes}
 
