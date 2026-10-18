@@ -15,7 +15,9 @@ que el frontend reenvía en el paso siguiente. Funciona igual en local y en Hugg
 """
 import json
 import math
+import os
 import threading
+import urllib.request
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -32,6 +34,23 @@ RAIZ = Path(__file__).resolve().parent.parent
 PROC = RAIZ / "data" / "processed"
 DATASET = RAIZ / "data" / "dataset"
 CRS_M = 25830
+ORDS_URL_POR_DEFECTO = "https://g65cd3d29f3f6ee-madcompanadb.adb.eu-madrid-1.oraclecloudapps.com/ords/maddata"
+
+
+def _ords_url(recurso):
+    return os.environ.get("ORDS_URL", ORDS_URL_POR_DEFECTO).rstrip("/") + "/dataset/" + recurso
+
+
+def _ords_filas(recurso):
+    """Todas las filas de un endpoint paginado de ORDS (sigue el enlace «next»)."""
+    url, filas = _ords_url(recurso), []
+    while url:
+        with urllib.request.urlopen(url, timeout=30) as r:
+            datos = json.loads(r.read().decode("utf-8"))
+        filas += datos.get("items", [])
+        url = next((l["href"] for l in datos.get("links", []) if l.get("rel") == "next"), None) \
+            if datos.get("hasMore") else None
+    return pd.DataFrame(filas)
 
 HORIZONTE_M = 150          # cuánto mira por delante
 RADIO_ARBOLES = 15         # m: árbol "en" el tramo (igual que trees_20m usa 15 m en el dataset)
@@ -170,38 +189,80 @@ class Acompanante:
         self._paso = threading.local()
         self._calles_4326 = c.geometry.to_crs(4326)
         print(f"  -> Acompañante listo: {len(self.vecinos)} cruces, "
-              f"{len(self.polen_mes)} filas de polen, {len(self.aire)} de aire.")
+              f"{len(self.polen_mes)} filas de polen, {len(self.aire)} de aire, "
+              f"{sum(sum(d.values()) for d in self.polen_tramo.values())} árboles con polen junto a tramos.")
+        print("     Origen de los datos ambientales: " + ", ".join(f"{k.strip('/')}={v}" for k, v in self.origen.items()))
 
     # ------------------------------------------------------------ datos ambientales
+    def _usa_api(self):
+        """Mismo origen que el motor: si las calles vienen de Oracle, el ambiente también."""
+        return getattr(self.m, "fuente", None) == "api"
+
+    def _tabla(self, recurso, csv):
+        """Filas de Oracle (API ORDS) si el motor usa la API; si falla o se trabaja en local,
+        la copia de data/processed/. Guarda de dónde salió cada tabla en self.origen."""
+        if self._usa_api():
+            try:
+                df = _ords_filas(recurso)
+                if not df.empty:
+                    self.origen[recurso] = "API de Oracle"
+                    return df
+                print(f"  -> La API devolvió 0 filas en {recurso}. Uso {csv}.")
+            except Exception as e:                       # noqa: BLE001 - sin conexión, API caída...
+                print(f"  -> No se pudo leer {recurso} de la API ({e}). Uso {csv}.")
+        ruta = PROC / csv
+        if ruta.exists():
+            self.origen[recurso] = "copia local"
+            return pd.read_csv(ruta)
+        self.origen[recurso] = "sin datos"
+        return pd.DataFrame()
+
     def _cargar_ambiente(self):
+        self.origen = {}
         self.polen_mes = {}
-        ruta = PROC / "polen_mes.csv"
-        if ruta.exists():
-            for f in pd.read_csv(ruta).itertuples():
-                self.polen_mes[(f.tipo_polen, int(f.mes))] = (f.nivel, float(f.nivel_medio))
-        self.especie_polen = {}
-        ruta = PROC / "especie_polen.csv"
-        if ruta.exists():
-            self.especie_polen = dict(pd.read_csv(ruta)[["especie", "tipo_polen"]].values)
+        for f in self._tabla("polen/", "polen_mes.csv").itertuples():
+            self.polen_mes[(f.tipo_polen, int(f.mes))] = (f.nivel, float(f.nivel_medio))
+        esp = self._tabla("especie_polen/", "especie_polen.csv")
+        self.especie_polen = dict(esp[["especie", "tipo_polen"]].values) if not esp.empty else {}
         self.aire = {}
-        ruta = PROC / "aire_mes_hora.csv"
-        if ruta.exists():
-            for f in pd.read_csv(ruta).itertuples():
-                self.aire[(int(f.mes), int(f.hora))] = (f.categoria, float(f.pct_regular_o_peor))
+        for f in self._tabla("aire/", "aire_mes_hora.csv").itertuples():
+            self.aire[(int(f.mes), int(f.hora))] = (f.categoria, float(f.pct_regular_o_peor))
+
+    def _arboles_con_polen(self):
+        """Árboles con su tipo de polen, en CRS métrico: de la API (arboles.geojson) o en local."""
+        arboles = getattr(self.m, "arbolado", None)
+        if arboles is not None and len(arboles) > 0:     # el motor ya los trae (modo local)
+            self.origen["arboles"] = "motor"
+            a = arboles.copy()
+            a["tipo_polen"] = a["especie"].map(self.especie_polen)
+            return a
+        if self._usa_api():
+            try:
+                with urllib.request.urlopen(_ords_url("arboles.geojson"), timeout=60) as r:
+                    datos = json.loads(r.read().decode("utf-8"))
+                a = gpd.GeoDataFrame.from_features(datos["features"], crs=4326).to_crs(CRS_M)
+                if not a.empty:
+                    self.origen["arboles"] = "API de Oracle"
+                    return a
+            except Exception as e:                       # noqa: BLE001
+                print(f"  -> No se pudo leer arboles.geojson de la API ({e}). Uso data/dataset/poi.geojson.")
+        ruta = DATASET / "poi.geojson"
+        if not ruta.exists():
+            self.origen["arboles"] = "sin datos"
+            return None
+        poi = gpd.read_file(ruta)
+        a = poi[poi["tipo"] == "arbol"].to_crs(CRS_M)
+        a["tipo_polen"] = a["especie"].map(self.especie_polen)
+        self.origen["arboles"] = "copia local"
+        return a
 
     def _polen_por_tramo(self):
         """tramo -> {tipo_polen: nº de árboles a menos de 15 m}. Cruza arbolado (Ayto.) con
         la tabla especie -> tipo de polen (calibrada con la red palinológica de la CM)."""
         self.polen_tramo = {}
-        arboles = getattr(self.m, "arbolado", None)
-        if arboles is None or len(arboles) == 0:                 # la API no publica los árboles
-            ruta = DATASET / "poi.geojson"
-            if not ruta.exists():
-                return
-            poi = gpd.read_file(ruta)
-            arboles = poi[poi["tipo"] == "arbol"].to_crs(CRS_M)
-        arboles = arboles.copy()
-        arboles["tipo_polen"] = arboles["especie"].map(self.especie_polen)
+        arboles = self._arboles_con_polen()
+        if arboles is None:
+            return
         arboles = arboles.dropna(subset=["tipo_polen"])
         if arboles.empty:
             return
