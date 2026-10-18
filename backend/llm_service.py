@@ -14,7 +14,7 @@ class IntencionUsuario(BaseModel):
     intencion: Literal["buscar_recurso", "calcular_ruta", "volver", "alerta_salud", "conversacion_general"] = Field(
         ..., description="Propósito principal detectado en el mensaje."
     )
-    tipo_recurso: Optional[Literal["banco", "farmacia", "fuente", "metro", "bus", "transporte"]] = Field(
+    tipo_recurso: Optional[Literal["banco", "farmacia", "fuente", "metro", "bus", "transporte", "centro_salud"]] = Field(
         None, description="Especifica el tipo si la intención es buscar_recurso."
     )
     cuestas: Optional[Literal["nada", "algo", "mucho"]] = Field(
@@ -48,6 +48,7 @@ Reglas estrictas de clasificación:
 2. BÚSQUEDA DE RECURSOS ESPECÍFICOS:
    - Pedir banco, asiento o lugar para sentarse -> intencion="buscar_recurso", tipo_recurso="banco".
    - Pedir farmacia o comprar medicinas de forma explícita -> intencion="buscar_recurso", tipo_recurso="farmacia".
+   - Pedir centro de salud, ambulatorio, médico de cabecera o consulta (sin urgencia grave) -> intencion="buscar_recurso", tipo_recurso="centro_salud".
    - Pedir fuente, agua o beber -> intencion="buscar_recurso", tipo_recurso="fuente".  
    - Pedir autobús, EMT o parada -> intencion="buscar_recurso", tipo_recurso="bus".
    - Pedir metro o boca de metro -> intencion="buscar_recurso", tipo_recurso="metro".
@@ -122,6 +123,8 @@ def analizar_mensaje_llm(texto_usuario: str) -> IntencionUsuario:
             descanso="mucho" if ("cansad" in txt or "agotad" in txt) else None,
             estado=estado,
         )
+    elif hay("centro de salud", "ambulatorio", "consultorio", "médico", "medico", "enfermer"):
+        return IntencionUsuario(intencion="buscar_recurso", tipo_recurso="centro_salud", estado=estado)
     elif hay("farmacia", "medicin", "remedio"):
         return IntencionUsuario(intencion="buscar_recurso", tipo_recurso="farmacia")
     elif hay("fuente", "agua", "beber", "sed"):

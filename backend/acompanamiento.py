@@ -71,6 +71,7 @@ REGLAS = {
     "polen":     (50, 500),
     "alejarse":  (40, 400),
     "agua":      (30, 500),
+    "centro_salud": (25, 800),  # pasa junto a un centro de salud (informativo, poco frecuente)
     "inicio":    (20, 10 ** 9),
 }
 
@@ -84,6 +85,7 @@ FUENTES_DATOS = {
     "polen": "Comunidad de Madrid · Red Palinológica (captadores AYTM y FACF)",
     "aire": "Ayuntamiento de Madrid · Calidad del aire, estación 38 (Cuatro Caminos)",
     "farmacias": "Comunidad de Madrid · Farmacias",
+    "centros_salud": "Comunidad de Madrid · Centros de Salud (IDEM)",
 }
 
 # ---------------------------------------------------------------- idoneidad personal
@@ -515,7 +517,7 @@ class Acompanante:
             candidatos.append(self._reaccion(nuevo, perfil, ctx, p, self._paso.rumbo, zona))
         for regla in (self._r_escaleras, self._r_cuesta, self._r_zona_actual, self._r_cansancio,
                       self._r_zona_delante, self._r_descanso, self._r_polen, self._r_alejarse,
-                      self._r_agua, self._r_inicio):
+                      self._r_agua, self._r_centro_salud, self._r_inicio):
             a = regla(perfil, ctx, idx, hacia, falta, ramas, previsto, presupuesto)
             if a:
                 candidatos.append(a)
@@ -724,8 +726,13 @@ class Acompanante:
             if trans:
                 partes.append(f"Cuando te encuentres mejor, si prefieres volver, {trans['tipo']} {trans['nombre']} está a unos {trans['distancia_m']} m.")
             far = self._recurso_orientado(p, rumbo, "farmacia")
-            sug = {"banco": banco, "transporte": trans, "farmacia": far, "telefono_emergencias": "112"}
-            fuentes = [FUENTES_DATOS["bancos"], FUENTES_DATOS["transporte"], FUENTES_DATOS["farmacias"]]
+            cs = self._recurso_orientado(p, rumbo, "centro_salud")
+            if cs:
+                partes.append(f"El centro de salud más cercano es el {cs['nombre']}, {self._donde(cs)}.")
+            sug = {"banco": banco, "transporte": trans, "farmacia": far, "centro_salud": cs,
+                   "telefono_emergencias": "112"}
+            fuentes = [FUENTES_DATOS["bancos"], FUENTES_DATOS["transporte"], FUENTES_DATOS["farmacias"],
+                       FUENTES_DATOS["centros_salud"]]
         elif estado == "dolor_piernas":
             if banco:
                 partes.append(f"Hay un banco {self._donde(banco)} para descansar las piernas.")
@@ -743,13 +750,17 @@ class Acompanante:
     def _r_urgencia(self, perfil, ctx, p, rumbo):
         far = self._recurso_orientado(p, rumbo, "farmacia")
         banco = self._recurso_orientado(p, rumbo, "banco")
+        cs = self._recurso_orientado(p, rumbo, "centro_salud")
         texto = "Si te encuentras muy mal, llama ahora al 112. Si puedes, siéntate o apóyate"
         texto += f" (hay un banco {self._donde(banco)})." if banco else "."
+        if cs:
+            texto += f" El centro de salud más cercano es el {cs['nombre']}, {self._donde(cs)}."
         lat, lon = self._a_latlon((p.x, p.y))
         return {"tipo": "alerta_salud", "mensaje": self._saludo(perfil, texto),
                 "sugerencia": {"telefono_emergencias": "112", "banco": banco, "farmacia": far,
-                               "tu_posicion": {"lat": lat, "lon": lon}},
-                "motivo": {"sintomas_graves": True}, "fuentes": [FUENTES_DATOS["bancos"], FUENTES_DATOS["farmacias"]]}
+                               "centro_salud": cs, "tu_posicion": {"lat": lat, "lon": lon}},
+                "motivo": {"sintomas_graves": True},
+                "fuentes": [FUENTES_DATOS["bancos"], FUENTES_DATOS["farmacias"], FUENTES_DATOS["centros_salud"]]}
 
     # ------------------------------------------------------------ mapa personal
     def mapa_personal(self, perfil, contexto=None):
@@ -940,6 +951,22 @@ class Acompanante:
         return {"tipo": "agua", "mensaje": self._saludo(perfil, texto), "sugerencia": {"recurso": f},
                 "motivo": {"mes": ctx["mes"], "hora": ctx["hora"], "metros_sin_fuente": round(ctx["metros_sin_fuente"])},
                 "fuentes": [FUENTES_DATOS["fuentes"]]}
+
+    def _r_centro_salud(self, perfil, ctx, idx, hacia, falta, ramas, previsto, presupuesto):
+        """Aviso informativo al pasar a menos de 80 m de un centro de salud (Comunidad de Madrid)."""
+        if ctx["metros_andados"] < 30:
+            return None
+        lat, lon = self._a_latlon(self._punto_actual(idx, hacia, falta))
+        try:
+            c = self.m.mas_cercano(lat, lon, "centro_salud")
+        except (ValueError, AttributeError):
+            return None
+        if c["distancia_m"] > 80:
+            return None
+        donde = f" ({c['direccion']})" if c.get("direccion") else ""
+        texto = f"Pasas junto al {c['nombre']}{donde}, por si lo necesitas."
+        return {"tipo": "centro_salud", "mensaje": self._saludo(perfil, texto), "sugerencia": {"recurso": c},
+                "motivo": {"distancia_m": c["distancia_m"]}, "fuentes": [FUENTES_DATOS["centros_salud"]]}
 
     def _r_inicio(self, perfil, ctx, idx, hacia, falta, ramas, previsto, presupuesto):
         if ctx["metros_andados"] > 30:

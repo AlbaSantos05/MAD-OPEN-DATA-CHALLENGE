@@ -121,6 +121,31 @@ def _cargar_dataset(fuente):
     return gpd.read_file(DATASET / "tramos.geojson"), gpd.read_file(DATASET / "poi.geojson")
 
 
+def _cargar_centros_salud(fuente):
+    """Centros de salud de la Comunidad de Madrid (tabla CENTROS_SALUD de Oracle).
+    Con fuente "api" se leen de la API; si falla, o en local, de data/processed/centros_salud.csv."""
+    g, origen = None, None
+    if fuente == "api":
+        base = os.environ.get("ORDS_URL", ORDS_URL_POR_DEFECTO).rstrip("/") + "/dataset/"
+        try:
+            g = _geojson_api(base + "centros_salud.geojson")
+            origen = "API de Oracle"
+        except Exception as e:                          # noqa: BLE001 - sin conexión, API caída...
+            print(f"  -> No se pudieron leer los centros de salud de la API ({e}). Uso la copia local.")
+    if g is None or g.empty:
+        ruta = DATOS / "centros_salud.csv"
+        if not ruta.exists():
+            print("  -> Sin datos de centros de salud.")
+            return gpd.GeoDataFrame({"tipo": [], "nombre_poi": []}, geometry=[], crs=CRS_M)
+        df = pd.read_csv(ruta)
+        g = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df["lon"], df["lat"]), crs=4326)
+        origen = "copia local"
+    g = g.rename(columns={"nombre": "nombre_poi"})
+    g["tipo"] = "centro_salud"
+    print(f"  -> {len(g)} centros de salud ({origen}).")
+    return g.to_crs(CRS_M)
+
+
 # ---------------------------------------------------------------- motor
 class Motor:
     def __init__(self, fuente=None, carpeta=DATOS):
@@ -157,6 +182,7 @@ class Motor:
             self._calcular_indicadores()
 
         self.fuente = fuente
+        self.centros_salud = _cargar_centros_salud(fuente)
         self._agrupar_bancos()
         self._construir_grafo()
         print(f"  -> {len(self.calles)} tramos y {self.G.number_of_nodes()} cruces listos.")
@@ -382,7 +408,7 @@ class Motor:
         }
 
     def mas_cercano(self, lat, lon, tipo):
-        """Atajos: tipo = 'banco', 'farmacia', 'metro', 'bus' o 'transporte'."""
+        """Atajos: tipo = 'banco', 'farmacia', 'fuente', 'metro', 'bus', 'transporte' o 'centro_salud'."""
         capas = {
             "banco": self.bancos,
             "farmacia": self.farmacias,
@@ -390,17 +416,20 @@ class Motor:
             "metro": self.transporte[self.transporte["tipo"] == "metro"],
             "bus": self.transporte[self.transporte["tipo"] == "bus"],
             "transporte": self.transporte,
+            "centro_salud": self.centros_salud,
         }
         if tipo not in capas:
             raise ValueError(f"Tipo desconocido: {tipo}")
         capa = capas[tipo]
+        if len(capa) == 0:
+            raise ValueError(f"No hay datos de {tipo.replace('_', ' ')}.")
         p = _a_metros(lat, lon)
         dist = capa.distance(p)
         i = dist.idxmin()
         fila = capa.loc[i]
         pt = gpd.GeoSeries([fila.geometry], crs=CRS_M).to_crs(4326).iloc[0]
         nombre = _nombre_lugar(fila, tipo)
-        return {
+        r = {
             "tipo": fila["tipo"] if "tipo" in fila.index else tipo,
             "nombre": nombre,
             "distancia_m": round(float(dist[i])),
@@ -408,6 +437,10 @@ class Motor:
             "lat": pt.y,
             "lon": pt.x,
         }
+        for extra in ("direccion", "url"):                # centros de salud: dirección y ficha oficial
+            if _texto(fila, extra):
+                r[extra] = _texto(fila, extra)
+        return r
 
 
 # ---------------------------------------------------------------- prueba en terminal

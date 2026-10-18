@@ -51,7 +51,7 @@ motor = Motor()
 acompanante = Acompanante(motor)
 
 Nivel = Literal["nada", "algo", "mucho"]
-TipoAtajo = Literal["banco", "farmacia", "fuente", "metro", "bus", "transporte"]
+TipoAtajo = Literal["banco", "farmacia", "fuente", "metro", "bus", "transporte", "centro_salud"]
 CAPAS = {"calles", "bancos", "farmacias", "fuentes", "metro", "bus"}
 
 
@@ -147,7 +147,7 @@ def ruta(peticion: PeticionRuta):
 
 @app.get("/atajo/{tipo}")
 def atajo(tipo: TipoAtajo, lat: float, lon: float):
-    """Atajos de un solo toque: banco, farmacia, metro, bus o transporte más cercano."""
+    """Atajos de un solo toque: banco, farmacia, fuente, metro, bus, transporte o centro de salud más cercano."""
     try:
         return motor.mas_cercano(lat, lon, tipo)
     except ValueError as e:
@@ -270,8 +270,9 @@ def chat_interactivo(peticion: PeticionChat):
             recurso = motor.mas_cercano(peticion.lat, peticion.lon, analisis.tipo_recurso)
             nombre = recurso.get("nombre") or f"un punto de {analisis.tipo_recurso}"
 
+            donde = f" ({recurso['direccion']})" if recurso.get("direccion") else ""
             respuesta_texto = (
-                f"He localizado {nombre} a unos {recurso['distancia_m']} metros de tu ubicación "
+                f"He localizado {nombre}{donde} a unos {recurso['distancia_m']} metros de tu ubicación "
                 f"(aproximadamente {recurso['minutos']} minutos a pie)."
             )
             return {
@@ -333,7 +334,7 @@ def chat_interactivo(peticion: PeticionChat):
 
         return {
             "intencion": "conversacion_general",
-            "respuesta": "Hola, soy tu acompañante urbano por Chamberí. Puedo buscarte el banco o farmacia más cercana, o sugerirte un camino adaptado.",
-            "sugerencias_botones": ["Buscar banco", "Buscar farmacia", "Calcular ruta"],
+            "respuesta": "Hola, soy tu acompañante urbano por Chamberí. Puedo buscarte el banco, la farmacia o el centro de salud más cercano, o sugerirte un camino adaptado.",
+            "sugerencias_botones": ["Buscar banco", "Buscar farmacia", "Buscar centro de salud", "Calcular ruta"],
             "accion_ui": "mostrar_opciones"
         }
