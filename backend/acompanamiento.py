@@ -22,8 +22,10 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 from shapely.geometry import LineString, Point
+from shapely.ops import substring
 
 try:
     from backend.profiles import NIVELES
@@ -61,19 +63,19 @@ MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto
 # Prioridad (mayor = más importante) y metros mínimos antes de repetir el mismo tipo de aviso
 REGLAS = {
     "alerta_salud": (100, 0),
+    "llegada":   (96, 0),       # modo destino: ha llegado
     "reaccion":  (95, 0),       # respuesta inmediata a lo que la persona acaba de decir
-    "escaleras": (90, 120),
-    "cuesta":    (80, 200),
-    "zona_actual": (75, 300),   # está en una zona poco adecuada PARA ELLA
+    "barrera":   (90, 0),       # por delante hay algo que para ESTA persona es una barrera (rojo)
     "cansancio": (70, 600),
-    "zona_delante": (65, 200),  # va a entrar en una zona poco adecuada
+    "incomodidad": (62, 0),     # por delante hay algo incómodo para ella (amarillo); espera por motivo
     "descanso":  (60, 250),
-    "polen":     (50, 500),
-    "alejarse":  (40, 400),
     "agua":      (30, 500),
     "centro_salud": (25, 800),  # pasa junto a un centro de salud (informativo, poco frecuente)
     "inicio":    (20, 10 ** 9),
 }
+# Metros antes de volver a avisar del mismo motivo (además, de un mismo tramo solo se avisa una vez)
+ESPERA_MOTIVO = {"escaleras": 100, "cuesta_fuerte": 150, "cuesta": 400, "polen": 500, "descanso": 400,
+                 "transporte": 500, "sombra": 400}
 
 FUENTES_DATOS = {
     "pendiente": "Pendiente por tramo (EU-DEM sobre red OSM)",
@@ -88,38 +90,27 @@ FUENTES_DATOS = {
     "centros_salud": "Comunidad de Madrid · Centros de Salud (IDEM)",
 }
 
-# ---------------------------------------------------------------- idoneidad personal
-# Cada tramo recibe una idoneidad 0-100 PARA ESTA PERSONA. Para cada factor:
-#   penalización = tope × min(1, peso/2 × p)     (p en 0..1 sale del dato del tramo)
-#   idoneidad    = 100 × Π (1 − penalización)
-# El peso sale del perfil (nada 0 / algo 1 / mucho 2) más lo que la persona dice en el paseo.
-# El tope limita factores que son preferencias y no barreras (árboles cerca ≠ sombra).
-TOPES = {"escaleras": 1.0, "cuesta": 1.0, "descanso": 0.7, "transporte": 0.5,
-         "polen": 0.8, "arbolado": 0.5, "agua": 0.5}
-APTA, NO_APTA = 70, 45            # ≥ 70 apta · 45-70 regular · < 45 no apta
-RADAR_M = 120                     # radio que vigila alrededor de la posición
+# ---------------------------------------------------------------- clasificación personal de tramos
+# Cada tramo tiene, PARA ESTA PERSONA y en este momento, una lista de motivos con su nivel:
+#   barrera (rojo) · incomodidad (amarillo). El color del tramo es su peor motivo; sin motivos, verde.
+# El perfil y lo que dice en el paseo deciden QUÉ motivos cuentan y CON QUÉ UMBRAL:
+CUESTA = {"nada": (None, 9.0), "algo": (7.0, 5.0), "mucho": (5.0, 3.0)}   # % (rojo desde, amarillo desde)
+BANCO_M = {"nada": None, "algo": 300, "mucho": 150}          # amarillo si el banco más cercano está más lejos
+TRANSPORTE_M = {"nada": None, "algo": 500, "mucho": 300}     # amarillo si la parada más cercana está más lejos
+POLEN_MIN_ARBOLES = 5        # alérgica: amarillo con 5+ árboles cuyo polen está medio/alto ese mes
+SOMBRA_FUENTE_M = 300        # con calor: sin árboles y fuente a más de 300 m
+LARGO_MIN_CUESTA = 15        # en tramos más cortos la pendiente del modelo digital no es fiable
+CATEGORIA = {"barrera": "no apta", "incomodidad": "regular", None: "apta"}
+MOTIVOS = [("escaleras", "barrera"), ("cuesta_fuerte", "barrera"), ("cuesta", "incomodidad"),
+           ("polen", "incomodidad"), ("descanso", "incomodidad"), ("transporte", "incomodidad"),
+           ("sombra", "incomodidad")]
+RADAR_M = 120                # radio que vigila alrededor de la posición
 
-# Estados que la persona puede decir durante el paseo y cuánto sube cada peso
-ESTADOS = {
-    "cansado":       {"descanso": 1.0, "cuesta": 1.0, "transporte": 0.5},
-    "calor":         {"arbolado": 1.0, "agua": 1.5, "descanso": 0.5},
-    "mareo":         {"descanso": 3.0, "transporte": 1.0, "cuesta": 1.0},
-    "dolor_piernas": {"cuesta": 2.0, "descanso": 1.0},
-}
+# Estados que la persona puede decir durante el paseo (su efecto: perfil_efectivo y umbrales)
+ESTADOS = ("cansado", "calor", "mareo", "dolor_piernas")
 _SUBIR = {"nada": "algo", "algo": "mucho", "mucho": "mucho"}
-
-
-# Regla clásica que cubre cada factor, y avisos que hacen innecesario otro inmediato
-FACTOR_REGLA = {"cuesta": "cuesta", "polen": "polen", "descanso": "descanso", "agua": "agua",
-                "transporte": "alejarse", "escaleras": "escaleras"}
-RELACIONADAS = {"cuesta": ("zona_delante",), "polen": ("zona_delante",), "escaleras": ("zona_delante",),
-                "zona_actual": ("zona_delante",), "zona_delante": ("zona_actual",)}
 REACCION_CUBRE = {"cansado": ("descanso", "cansancio"), "calor": ("agua", "descanso"),
                   "mareo": ("descanso", "cansancio"), "dolor_piernas": ("descanso", "cansancio")}
-
-
-def _categoria(score):
-    return "apta" if score >= APTA else ("regular" if score >= NO_APTA else "no apta")
 
 
 def _lista(partes):
@@ -285,7 +276,7 @@ class Acompanante:
                     detalle[tipo] = (detalle.get(tipo, (0, nivel))[0] + n, nivel)
         return total, detalle
 
-    # ------------------------------------------------------------ idoneidad personal por tramo
+    # ------------------------------------------------------------ clasificación personal de tramos
     @staticmethod
     def estados(perfil, ctx):
         """Estados activos: los que la persona ha dicho en el paseo (+ «cansado» del perfil)."""
@@ -296,37 +287,42 @@ class Acompanante:
 
     @staticmethod
     def perfil_efectivo(perfil, estados):
-        """El perfil tal y como está AHORA: lo que dice durante el paseo endurece los umbrales."""
-        cambios = {}
-        if estados & {"cansado", "mareo", "dolor_piernas"}:
+        """El perfil tal y como está AHORA según lo que ha dicho:
+        cansada / le duelen las piernas -> descanso sube un nivel · mareo -> descanso «mucho» y
+        transporte al menos «algo» · calor -> arbolado «mucho». (Las cuestas bajan su umbral en `umbrales`.)"""
+        cambios, descanso = {}, perfil.descanso
+        if estados & {"cansado", "dolor_piernas"}:
+            descanso = _SUBIR[descanso]
             cambios["cansado"] = True
-        if "dolor_piernas" in estados:
-            cambios["cuestas"] = _SUBIR[perfil.cuestas]
         if "mareo" in estados:
-            cambios["descanso"] = "mucho"
+            descanso = "mucho"
+            cambios["cansado"] = True
+            if perfil.transporte == "nada":
+                cambios["transporte"] = "algo"
+        if descanso != perfil.descanso:
+            cambios["descanso"] = descanso
         if "calor" in estados:
-            cambios["arbolado"] = _SUBIR[perfil.arbolado]
-            cambios["descanso"] = _SUBIR[cambios.get("descanso", perfil.descanso)]
+            cambios["arbolado"] = "mucho"
         return replace(perfil, **cambios) if cambios else perfil
 
-    def _umbral_cuesta_mapa(self, perfil):
-        u = self._umbral_cuesta(perfil)
-        return u if u is not None else 9.0          # sin dificultad declarada: solo cuestas fuertes
+    @staticmethod
+    def umbrales(perfil, estados, mes, hora):
+        """Qué motivos cuentan para esta persona AHORA y con qué umbral (`perfil` = perfil efectivo)."""
+        rojo, amarillo = CUESTA[perfil.cuestas]
+        baja = 2.0 if "dolor_piernas" in estados else (1.0 if ("cansado" in estados or perfil.cansado) else 0.0)
+        verano = 6 <= mes <= 9 and 12 <= hora <= 20
+        return {"escaleras": bool(perfil.escaleras),
+                "cuesta_rojo_pct": rojo - baja if rojo is not None else None,
+                "cuesta_amarillo_pct": amarillo - baja,
+                "banco_m": BANCO_M[perfil.descanso],
+                "transporte_m": TRANSPORTE_M[perfil.transporte],
+                "sombra": perfil.arbolado == "mucho",
+                "calor": "calor" in estados or verano,
+                "polen": bool(getattr(perfil, "sensible_polen", False))}
 
-    def pesos_idoneidad(self, perfil, estados, mes, hora):
-        p = {"cuesta": NIVELES[perfil.cuestas], "descanso": NIVELES[perfil.descanso],
-             "transporte": NIVELES[perfil.transporte], "arbolado": NIVELES[perfil.arbolado],
-             "polen": 2.0 if getattr(perfil, "sensible_polen", False) else 0.0,
-             "agua": 1.0 if (6 <= mes <= 9 and 12 <= hora <= 20) else 0.0,
-             "escaleras": 0.0}
-        for e in estados:
-            for k, w in ESTADOS.get(e, {}).items():
-                p[k] += w
-        return p
-
-    def idoneidad(self, perfil, contexto=None):
-        """DataFrame (índice = tramo) con la penalización de cada factor, la idoneidad 0-100
-        y la categoría, para este perfil, lo que ha dicho en el paseo, el mes y la hora."""
+    def clasificar(self, perfil, contexto=None):
+        """Tabla (índice = tramo): cada motivo (True/False), el nivel del tramo (barrera / incomodidad /
+        None) y su categoría (no apta / regular / apta) para ESTA persona, lo que ha dicho, el mes y la hora."""
         ctx = contexto or {}
         estados = self.estados(perfil, ctx)
         mes, hora = int(ctx.get("mes", 10)), int(ctx.get("hora", 17))
@@ -334,61 +330,77 @@ class Acompanante:
         if clave in self._cache_idon:
             return self._cache_idon[clave]
 
-        pe = self.perfil_efectivo(perfil, estados)
-        w = self.pesos_idoneidad(pe, estados, mes, hora)
+        u = self.umbrales(self.perfil_efectivo(perfil, estados), estados, mes, hora)
         c = self.calles
-        umbral = self._umbral_cuesta_mapa(pe)
-        p = pd.DataFrame(index=c.index)
-        p["cuesta"] = ((c["pendiente_pct"] - (umbral - 1)) / 2).clip(0, 1)   # 0 un punto por debajo del umbral
-        p["descanso"] = ((self._dist_banco - 50) / 250).clip(0, 1)
-        p["transporte"] = ((c["dist_transporte"] - 150) / 350).clip(0, 1)
-        p["arbolado"] = 1 / (1 + self._arboles)
-        p["agua"] = ((self._dist_agua - 150) / 400).clip(0, 1)
-        p["polen"] = (self._polen_serie(mes) / 10).clip(0, 1)
-
-        pen = pd.DataFrame(index=c.index)
-        for k in ("cuesta", "descanso", "transporte", "arbolado", "agua", "polen"):
-            pen[k] = TOPES[k] * (w[k] / 2 * p[k]).clip(upper=1)
-        pen["escaleras"] = c["escalera"].astype(float) if pe.escaleras else 0.0
-        score = 100 * (1 - pen).prod(axis=1)
-        pen["idoneidad"] = score.round(0)
-        pen["categoria"] = score.map(_categoria)
+        pend, largo_ok = c["pendiente_pct"], c["length"] >= LARGO_MIN_CUESTA
+        sin_arboles = self._arboles <= 0
+        t = pd.DataFrame(index=c.index)
+        t["escaleras"] = c["escalera"].astype(bool) & u["escaleras"]
+        t["cuesta_fuerte"] = (largo_ok & (pend >= u["cuesta_rojo_pct"])) if u["cuesta_rojo_pct"] is not None else False
+        t["cuesta"] = largo_ok & (pend >= u["cuesta_amarillo_pct"]) & ~t["cuesta_fuerte"]
+        t["polen"] = (self._polen_serie(mes) >= POLEN_MIN_ARBOLES) if u["polen"] else False
+        t["descanso"] = (self._dist_banco > u["banco_m"]) if u["banco_m"] else False
+        t["transporte"] = (c["dist_transporte"] > u["transporte_m"]) if u["transporte_m"] else False
+        if u["sombra"]:
+            t["sombra"] = sin_arboles
+        elif u["calor"]:                               # verano a mediodía: sin sombra Y sin fuente cerca
+            t["sombra"] = sin_arboles & (self._dist_agua > SOMBRA_FUENTE_M)
+        else:
+            t["sombra"] = False
+        rojo = t["escaleras"] | t["cuesta_fuerte"]
+        amarillo = t[["cuesta", "polen", "descanso", "transporte", "sombra"]].any(axis=1)
+        t["nivel"] = pd.Series(np.where(rojo, "barrera", np.where(amarillo, "incomodidad", None)), index=c.index)
+        t["categoria"] = t["nivel"].map(lambda n: CATEGORIA[n if isinstance(n, str) else None])
+        t.attrs.update({"umbrales": u, "mes": mes, "estados": sorted(estados)})
         if len(self._cache_idon) > 32:
             self._cache_idon.clear()
-        self._cache_idon[clave] = pen
-        return pen
+        self._cache_idon[clave] = t
+        return t
 
     def _polen_serie(self, mes):
         n = {idx: self._polen_activo([idx], mes)[0] for idx in self.polen_tramo}
         return pd.Series(n, dtype=float).reindex(self.calles.index, fill_value=0.0)
 
-    def motivos(self, idx, pen, mes):
-        """Por qué un tramo no es adecuado, en palabras y con el dato que lo explica."""
-        f = self.calles.loc[idx]
-        fila = pen.loc[idx]
-        textos = {
-            "escaleras": "tiene escaleras",
-            "cuesta": f"tiene una cuesta del {float(f['pendiente_pct']):.0f} %",
-            "descanso": f"el banco más cercano queda a unos {float(self._dist_banco[idx]):.0f} m",
-            "transporte": f"el transporte público queda a unos {float(f['dist_transporte']):.0f} m",
-            "arbolado": "apenas tiene árboles cerca",
-            "agua": f"la fuente más cercana queda a unos {float(self._dist_agua[idx]):.0f} m",
-            "polen": f"hay {self._polen_activo([idx], mes)[0]} árboles cuyo polen suele estar alto o medio en {MESES[mes - 1]}",
-        }
-        orden = sorted(TOPES, key=lambda k: -float(fila[k]))
-        return [{"factor": k, "texto": textos[k], "penalizacion": round(float(fila[k]), 2)}
-                for k in orden if float(fila[k]) >= 0.2]
+    def motivos(self, idx, cl, mes=None):
+        """Motivos de un tramo para esta persona, en palabras y con el dato: [{factor, nivel, texto}]."""
+        mes = int(mes or cl.attrs.get("mes", 10))
+        fila, f, u = cl.loc[idx], self.calles.loc[idx], cl.attrs["umbrales"]
+        out = []
+        for col, nivel in MOTIVOS:
+            if not bool(fila[col]):
+                continue
+            if col in ("cuesta", "cuesta_fuerte"):
+                texto = f"hay una cuesta del {float(f['pendiente_pct']):.0f} %"
+            elif col == "escaleras":
+                texto = "hay escaleras"
+            elif col == "polen":
+                n, detalle = self._polen_activo([idx], mes)
+                tipo, (_, niv) = max(detalle.items(), key=lambda kv: kv[1][0])
+                texto = (f"hay {n} árboles cuyo polen suele estar {niv} en {MESES[mes - 1]} "
+                         f"(sobre todo {tipo.lower()})")
+            elif col == "descanso":
+                texto = f"el banco más cercano queda a unos {float(self._dist_banco[idx]):.0f} m"
+            elif col == "transporte":
+                texto = f"el transporte público queda a unos {float(f['dist_transporte']):.0f} m"
+            else:
+                texto = "no hay árboles que den sombra"
+                if u["calor"] and float(self._dist_agua[idx]) > SOMBRA_FUENTE_M:
+                    texto += f" y la fuente más cercana queda a unos {float(self._dist_agua[idx]):.0f} m"
+            out.append({"factor": "cuesta" if col.startswith("cuesta") else col, "clave": col,
+                        "nivel": nivel, "texto": texto})
+        return out
 
-    def _score_camino(self, idxs, pen):
-        largos = self.calles.loc[idxs, "length"].clip(lower=1)
-        return float((pen.loc[idxs, "idoneidad"] * largos).sum() / largos.sum())
+    @staticmethod
+    def _peor(cl, idxs):
+        niv = cl.loc[list(idxs), "nivel"]
+        return "barrera" if (niv == "barrera").any() else ("incomodidad" if (niv == "incomodidad").any() else None)
 
-    def radar(self, p, pen, radio=RADAR_M):
-        """Tramos a menos de `radio` m de la posición, con su idoneidad y distancia."""
+    def radar(self, p, cl, radio=RADAR_M):
+        """Tramos a menos de `radio` m de la posición, con su nivel y distancia."""
         pos = self.calles.sindex.query(p.buffer(radio), predicate="intersects")
         idxs = self.calles.index[pos]
         d = self.calles.loc[idxs].geometry.distance(p)
-        return pd.DataFrame({"idoneidad": pen.loc[idxs, "idoneidad"], "distancia": d}).sort_values("distancia")
+        return pd.DataFrame({"nivel": cl.loc[idxs, "nivel"], "distancia": d}).sort_values("distancia")
 
     # ------------------------------------------------------------ dónde está y hacia dónde va
     def _a_metros(self, lat, lon):
@@ -504,20 +516,43 @@ class Acompanante:
         presupuesto = max(HORIZONTE_M - falta, 0)
         previsto = [idx] + (self._seguir(ramas[0][0], hacia, presupuesto) if ramas and abs(ramas[0][2]) < 35 and presupuesto > 0 else [])
 
-        pen = self.idoneidad(perfil_base, ctx)
-        # Estado de ESTE paso para las reglas de zona (por hilo: FastAPI atiende peticiones en paralelo)
-        self._paso.pen, self._paso.p = pen, p
+        # Modo destino (volver, ir al banco más cercano...): la ruta más corta se RECALCULA en cada paso
+        # desde donde está ahora; lo que se mira «por delante» es la ruta, no la calle más recta.
+        nav, self._paso.nav, dar_vuelta = None, None, False
+        if ctx.get("destino"):
+            nav = self._navegar(p, idx, hacia, desde, falta, rumbo if p_antes is not None else None, ctx["destino"])
+            if nav is None:                              # sin camino posible: se sigue como paseo libre
+                ctx.pop("destino", None)
+            else:
+                interno = nav.pop("_interno", None)      # datos internos: no salen en la respuesta
+            if nav is not None and not nav["llegado"] and interno:
+                self._paso.nav = interno
+                dar_vuelta = interno["dar_vuelta"]
+                previsto = [idx] + (self._recortar(interno["camino"], presupuesto) if not dar_vuelta else [])
+
+        cl = self.clasificar(perfil_base, ctx)
+        # Estado de ESTE paso para las reglas (por hilo: FastAPI atiende peticiones en paralelo)
+        self._paso.cl, self._paso.p = cl, p
         self._paso.rumbo = rumbo if p_antes is not None else None   # sin paso anterior no hay sentido
-        zona = self._zona(p, idx, previsto, pen, ctx)
+        zona = self._zona(p, idx, previsto, cl, ctx)
+
+        # Sin paso anterior no se sabe hacia dónde va (y si tiene que dar la vuelta, lo de «delante»
+        # queda detrás): no se avisa de lo que hay «por delante»
+        sin_sentido = p_antes is None or dar_vuelta
+        direccionales = {self._r_por_delante}
 
         candidatos = []
+        if nav and nav["llegado"]:
+            candidatos.append(self._r_llegada(perfil, ctx["destino"]))
+            ctx.pop("destino", None)
         if urgencia:
             candidatos.append(self._r_urgencia(perfil, ctx, p, self._paso.rumbo))
         elif nuevo:
             candidatos.append(self._reaccion(nuevo, perfil, ctx, p, self._paso.rumbo, zona))
-        for regla in (self._r_escaleras, self._r_cuesta, self._r_zona_actual, self._r_cansancio,
-                      self._r_zona_delante, self._r_descanso, self._r_polen, self._r_alejarse,
+        for regla in (self._r_por_delante, self._r_cansancio, self._r_descanso,
                       self._r_agua, self._r_centro_salud, self._r_inicio):
+            if sin_sentido and regla in direccionales:
+                continue
             a = regla(perfil, ctx, idx, hacia, falta, ramas, previsto, presupuesto)
             if a:
                 candidatos.append(a)
@@ -526,11 +561,11 @@ class Acompanante:
         validos = []
         for a in candidatos:
             prioridad, espera = REGLAS[a["tipo"]]
-            inmediato = a["tipo"] in ("reaccion", "alerta_salud")
+            inmediato = a["tipo"] in ("reaccion", "alerta_salud", "llegada")
             ultimo = ctx["avisos_dados"].get(a["tipo"], -10 ** 9)
             if not inmediato and ctx["metros_andados"] - ultimo < espera:
                 continue
-            if (not inmediato and a["tipo"] != "escaleras"
+            if (not inmediato and not (a["tipo"] == "barrera" and a.get("factor") == "escaleras")
                     and ctx["metros_andados"] - ctx["ultimo_aviso_m"] < SEPARACION_MIN_M):
                 continue
             a["prioridad"] = prioridad
@@ -539,18 +574,14 @@ class Acompanante:
         aviso = validos[0] if validos else None
         if aviso:
             ctx["avisos_dados"][aviso["tipo"]] = ctx["metros_andados"]
-            # Lo ya dicho por una regla no se repite con otras palabras por otra
-            for t in RELACIONADAS.get(aviso["tipo"], ()):
-                ctx["avisos_dados"][t] = ctx["metros_andados"]
-            if aviso["tipo"] == "reaccion":
+            if aviso["tipo"] == "reaccion":                # lo que ya cubre la respuesta no se repite
                 for t in REACCION_CUBRE.get(aviso.get("estado"), ()):
                     ctx["avisos_dados"][t] = ctx["metros_andados"]
-            for fac in (aviso.get("motivo") or {}).get("factores", [])[:2]:
-                if FACTOR_REGLA.get(fac["factor"]):
-                    ctx["avisos_dados"][FACTOR_REGLA[fac["factor"]]] = ctx["metros_andados"]
+            for fac in (aviso.get("motivo") or {}).get("factores", []):
+                ctx["avisos_dados"]["motivo:" + fac["clave"]] = ctx["metros_andados"]
             ctx["ultimo_aviso_m"] = ctx["metros_andados"]
-            if aviso.get("tramo_id") is not None:
-                ctx["tramos_avisados"] = (ctx["tramos_avisados"] + [int(aviso["tramo_id"])])[-30:]
+            if aviso.get("tramos"):
+                ctx["tramos_avisados"] = (ctx["tramos_avisados"] + aviso["tramos"])[-40:]
 
         ctx["metros_andados"] = round(ctx["metros_andados"], 1)
         ctx["metros_sin_banco"] = round(ctx["metros_sin_banco"], 1)
@@ -561,26 +592,24 @@ class Acompanante:
             "aviso": aviso,
             "tambien_se_cumplian": [a["tipo"] for a in validos[1:]],
             "zona": zona,
+            "destino": nav,                     # None en paseo libre
             "contexto": ctx,
         }
 
-    # ------------------------------------------------------------ zonas adecuadas / no adecuadas
-    def _zona(self, p, idx, previsto, pen, ctx):
-        """Lo que ve el radar: idoneidad aquí, por delante y tramos no aptos alrededor."""
-        r = self.radar(p, pen)
-        cerca = r[r["distancia"] <= 60].index.tolist() or [idx]
-        aqui = round(0.5 * float(pen.at[idx, "idoneidad"]) + 0.5 * self._score_camino(cerca, pen))
-        delante = round(self._score_camino(previsto[1:], pen)) if len(previsto) > 1 else None
+    # ------------------------------------------------------------ lo que hay alrededor
+    def _zona(self, p, idx, previsto, cl, ctx):
+        """Cómo es para esta persona su calle, lo que viene por delante y los tramos rojos cerca."""
         mes = int(ctx.get("mes", 10))
-        no_aptas = []
-        for i, fila in r[r["idoneidad"] < NO_APTA].head(5).iterrows():
-            no_aptas.append({"tramo_id": int(i), "calle": _calle(self.calles.at[i, "nombre"]),
-                             "idoneidad": int(fila["idoneidad"]), "distancia_m": round(float(fila["distancia"])),
-                             "motivos": [m["texto"] for m in self.motivos(i, pen, mes)]})
-        return {"idoneidad_aqui": aqui, "categoria_aqui": _categoria(aqui),
-                "idoneidad_delante": delante,
-                "categoria_delante": _categoria(delante) if delante is not None else None,
-                "radio_m": RADAR_M, "no_aptas_cerca": no_aptas,
+        r = self.radar(p, cl)
+        rojos = []
+        for i, fila in r[r["nivel"] == "barrera"].head(5).iterrows():
+            rojos.append({"tramo_id": int(i), "calle": _calle(self.calles.at[i, "nombre"]),
+                          "distancia_m": round(float(fila["distancia"])),
+                          "motivos": [m["texto"] for m in self.motivos(i, cl, mes)]})
+        return {"categoria_aqui": cl.at[idx, "categoria"],
+                "motivos_aqui": [m["texto"] for m in self.motivos(idx, cl, mes)],
+                "categoria_delante": CATEGORIA[self._peor(cl, previsto[1:])] if len(previsto) > 1 else None,
+                "radio_m": RADAR_M, "no_aptas_cerca": rojos,
                 "estados": sorted(self.estados(None, ctx))}
 
     def _orientacion(self, p, xy, rumbo):
@@ -596,79 +625,10 @@ class Acompanante:
             return "detrás"
         return "a tu derecha" if dif > 0 else "a tu izquierda"
 
-    def _mejor_cerca(self, p, pen, minimo=APTA, radio=150, excluir=()):
-        """Tramo adecuado más cercano: {calle, distancia_m, orientacion, idoneidad, coordenadas}."""
-        r = self.radar(p, pen, radio)
-        r = r[(r["idoneidad"] >= minimo) & ~r.index.isin(list(excluir))]
-        if r.empty:
-            return None
-        i = r.index[0]
-        punto = self.calles.at[i, "geometry"].interpolate(self.calles.at[i, "geometry"].project(p))
-        return {"tramo_id": int(i), "calle": _calle(self.calles.at[i, "nombre"]),
-                "distancia_m": round(float(r.iloc[0]["distancia"])),
-                "orientacion": self._orientacion(p, (punto.x, punto.y), self._paso.rumbo),
-                "idoneidad": int(r.iloc[0]["idoneidad"]),
-                "coordenadas": [self._a_latlon((punto.x, punto.y))]}
-
-    def _r_zona_actual(self, perfil, ctx, idx, hacia, falta, ramas, previsto, presupuesto):
-        pen, p = self._paso.pen, self._paso.p
-        r = self.radar(p, pen, 60)
-        aqui = 0.5 * float(pen.at[idx, "idoneidad"]) + 0.5 * self._score_camino(r.index.tolist() or [idx], pen)
-        if aqui >= NO_APTA or int(idx) in ctx["tramos_avisados"] or ctx["metros_andados"] < 30:
-            return None
-        mes = int(ctx["mes"])
-        mot = self.motivos(idx, pen, mes)
-        if not mot:
-            return None
-        alt = self._mejor_cerca(p, pen, excluir=[idx])
-        texto = f"Esta zona no es la más cómoda para ti: {_lista([m['texto'] for m in mot[:2]])}."
-        if alt and alt["distancia_m"] >= 20:
-            ori = f", {alt['orientacion']}" if alt["orientacion"] else ""
-            texto += f" A unos {alt['distancia_m']} m{ori}{_por(alt['calle'])}, la zona es más adecuada."
-        elif falta >= 30:
-            texto += f" Quedan unos {falta:.0f} m hasta el cruce."
-        return {"tipo": "zona_actual", "tramo_id": int(idx), "mensaje": self._saludo(perfil, texto),
-                "sugerencia": alt,
-                "motivo": {"idoneidad_zona": round(aqui), "umbral_no_apta": NO_APTA, "factores": mot},
-                "fuentes": self._fuentes_de(mot)}
-
-    def _r_zona_delante(self, perfil, ctx, idx, hacia, falta, ramas, previsto, presupuesto):
-        pen = self._paso.pen
-        if len(previsto) < 2:
-            return None
-        delante = previsto[1:]
-        sc = self._score_camino(delante, pen)
-        aqui = float(pen.at[idx, "idoneidad"])
-        if sc >= NO_APTA or aqui < 60 or any(int(i) in ctx["tramos_avisados"] for i in delante):
-            return None
-        peor = min(delante, key=lambda i: pen.at[i, "idoneidad"])
-        mes = int(ctx["mes"])
-        mot = self.motivos(peor, pen, mes)
-        if not mot:
-            return None
-        # Mejor salida del cruce según la idoneidad de lo que viene después
-        alt, mejor = None, sc
-        for i, otro, dif in ramas:
-            camino = self._seguir(i, hacia, max(presupuesto, 80))
-            s = self._score_camino(camino, pen)
-            if s >= max(mejor + 20, APTA - 10) and abs(dif) <= 145:
-                mejor = s
-                alt = {"direccion": _palabra_giro(dif), "calle": _calle(self.calles.at[i, "nombre"]),
-                       "tramo_id": int(i), "idoneidad": round(s),
-                       "coordenadas": [self._a_latlon(self.xy[otro])]}
-        texto = f"Si sigues recto entras en una zona menos cómoda para ti: {_lista([m['texto'] for m in mot[:2]])}."
-        if alt and alt["direccion"] != "recto":
-            texto += f" En el cruce, {alt['direccion']}{_por(alt['calle'])}, se está mejor."
-        return {"tipo": "zona_delante", "tramo_id": int(peor), "mensaje": self._saludo(perfil, texto),
-                "sugerencia": alt,
-                "motivo": {"idoneidad_delante": round(sc), "idoneidad_aqui": round(aqui), "factores": mot},
-                "fuentes": self._fuentes_de(mot)}
-
     @staticmethod
     def _fuentes_de(motivos):
         mapa = {"escaleras": ["escaleras"], "cuesta": ["pendiente"], "descanso": ["bancos"],
-                "transporte": ["transporte"], "arbolado": ["arbolado"], "agua": ["fuentes"],
-                "polen": ["arbolado", "polen"]}
+                "transporte": ["transporte"], "sombra": ["arbolado", "fuentes"], "polen": ["arbolado", "polen"]}
         out = []
         for m in motivos:
             for k in mapa[m["factor"]]:
@@ -744,7 +704,7 @@ class Acompanante:
         return {"tipo": "reaccion", "estado": estado, "mensaje": self._saludo(perfil, " ".join(partes)),
                 "sugerencia": sug or None,
                 "motivo": {"estado_dicho": estado, "estados_activos": ctx["estados"],
-                           "idoneidad_aqui_ahora": zona["idoneidad_aqui"]},
+                           "categoria_aqui_ahora": zona["categoria_aqui"]},
                 "fuentes": fuentes}
 
     def _r_urgencia(self, perfil, ctx, p, rumbo):
@@ -764,26 +724,24 @@ class Acompanante:
 
     # ------------------------------------------------------------ mapa personal
     def mapa_personal(self, perfil, contexto=None):
-        """GeoJSON de los tramos con su idoneidad y categoría PARA ESTA PERSONA."""
+        """GeoJSON de los tramos con su categoría PARA ESTA PERSONA (apta / regular / no apta) y sus
+        motivos. Sale de los mismos motivos y umbrales que los avisos: el mapa y el acompañante coinciden."""
         ctx = contexto or {}
-        pen = self.idoneidad(perfil, ctx)
+        cl = self.clasificar(perfil, ctx)
         mes = int(ctx.get("mes", 10))
         feats = []
         cuenta = {"apta": 0, "regular": 0, "no apta": 0}
         for idx, geom in self._calles_4326.items():
-            cat = pen.at[idx, "categoria"]
+            cat = cl.at[idx, "categoria"]
             cuenta[cat] += 1
-            props = {"tramo_id": int(idx), "calle": _calle(self.calles.at[idx, "nombre"]),
-                     "idoneidad": int(pen.at[idx, "idoneidad"]), "categoria": cat}
+            props = {"tramo_id": int(idx), "calle": _calle(self.calles.at[idx, "nombre"]), "categoria": cat}
             if cat != "apta":
-                props["motivos"] = [m["texto"] for m in self.motivos(idx, pen, mes)]
+                props["motivos"] = [m["texto"] for m in self.motivos(idx, cl, mes)]
             feats.append({"type": "Feature", "properties": props,
                           "geometry": {"type": "LineString",
                                        "coordinates": [[round(x, 6), round(y, 6)] for x, y in geom.coords]}})
         return {"type": "FeatureCollection", "features": feats,
-                "resumen": {**cuenta, "estados": sorted(self.estados(perfil, ctx)),
-                            "pesos": self.pesos_idoneidad(self.perfil_efectivo(perfil, self.estados(perfil, ctx)),
-                                                          self.estados(perfil, ctx), mes, int(ctx.get("hora", 17)))}}
+                "resumen": {**cuenta, "estados": cl.attrs["estados"], "umbrales": cl.attrs["umbrales"]}}
 
     # ------------------------------------------------------------ reglas
     @staticmethod
@@ -794,69 +752,112 @@ class Acompanante:
         n = self._nombre(perfil)
         return f"{n}, {texto[0].lower()}{texto[1:]}" if n else texto
 
-    def _alternativa(self, ramas, hacia, presupuesto, malo):
-        """Mejor salida del cruce que evita lo `malo` (función tramo->bool) en el horizonte."""
-        for idx, otro, dif in ramas[1:] if ramas and abs(ramas[0][2]) < 35 else ramas:
-            camino = self._seguir(idx, hacia, max(presupuesto, 60))
-            if not any(malo(i) for i in camino):
-                calle = _calle(self.calles.at[idx, "nombre"])
-                return {"direccion": _palabra_giro(dif), "calle": calle,
-                        "tramo_id": int(idx), "coordenadas": [self._a_latlon(self.xy[otro])]}
-        return None
-
-    def _r_escaleras(self, perfil, ctx, idx, hacia, falta, ramas, previsto, presupuesto):
-        if not perfil.escaleras:
-            return None
-        for i in previsto:
-            if bool(self.calles.at[i, "escalera"]) and int(i) not in ctx["tramos_avisados"]:
-                alt = self._alternativa(ramas, hacia, presupuesto, lambda t: bool(self.calles.at[t, "escalera"]))
-                texto = "Por delante hay escaleras."
-                if alt:
-                    texto += f" En el próximo cruce sigue {alt['direccion']}{_por(alt['calle'])} para evitarlas."
-                return {"tipo": "escaleras", "tramo_id": int(i), "mensaje": self._saludo(perfil, texto),
-                        "sugerencia": alt, "motivo": {"tramo_con_escaleras": int(i)},
-                        "fuentes": [FUENTES_DATOS["escaleras"]]}
-        return None
-
-    def _umbral_cuesta(self, perfil):
-        base = {"mucho": 5.0, "algo": 7.0}.get(perfil.cuestas)
-        if base is None:
-            return 7.0 if perfil.cansado else None
-        return base - 1.0 if perfil.cansado else base
-
-    def _r_cuesta(self, perfil, ctx, idx, hacia, falta, ramas, previsto, presupuesto):
-        umbral = self._umbral_cuesta(perfil)
-        if umbral is None:
-            return None
-        distancia_hasta = 0.0                       # metros desde la persona hasta el inicio del tramo
-        for j, i in enumerate(previsto):
-            largo = float(self.calles.at[i, "length"])
-            pend = float(self.calles.at[i, "pendiente_pct"])
-            if j == 1:
-                distancia_hasta = falta
-            elif j > 1:
-                distancia_hasta += float(self.calles.at[previsto[j - 1], "length"])
-            if pend < umbral or largo < 15 or int(i) in ctx["tramos_avisados"]:
+    def _mejor_salida(self, ramas, hacia, presupuesto, cl, nivel_actual):
+        """Salida del próximo cruce con lo que viene después MEJOR que lo de ahora: verde antes que amarillo,
+        nunca roja. Paseo libre: el camino más recto por esa salida. Modo destino: la ruta por esa salida
+        hasta el destino, solo si no alarga demasiado, y diciendo cuánto alarga."""
+        orden = {None: 0, "incomodidad": 1, "barrera": 2}
+        nav = getattr(self._paso, "nav", None)
+        if nav:
+            principal = nav["camino"][0] if nav["camino"] else None
+        else:
+            principal = ramas[0][0] if ramas and abs(ramas[0][2]) < 35 else None
+        mejor = None
+        for idx, otro, dif in ramas:
+            if idx == principal:
                 continue
-            if j == 0:
-                if falta < 40:                      # casi acabado: no merece la pena avisar
+            extra = None
+            if nav:
+                extra = self._extra(idx, otro, hacia)
+                # Para evitar algo rojo puede merecer la pena un rodeo; para algo amarillo, solo uno pequeño
+                if extra is None or (nivel_actual == "incomodidad" and extra > 60):
                     continue
-                texto = (f"Estás en un tramo con cuesta (un {pend:.0f} %). "
-                         f"Quedan unos {falta:.0f} m hasta el cruce; ve con calma.")
-                alt = None
+                camino = [idx] + self._recortar(self._camino_hasta(otro, nav["dnodo"], nav["dist"]), max(presupuesto, 60))
             else:
-                alt = self._alternativa(ramas, hacia, presupuesto,
-                                        lambda t: float(self.calles.at[t, "pendiente_pct"]) >= umbral
-                                        and float(self.calles.at[t, "length"]) >= 15)
-                texto = f"En unos {distancia_hasta:.0f} m empieza una cuesta (un {pend:.0f} %)."
-                if alt:
-                    texto += f" Si en el cruce sigues {alt['direccion']}{_por(alt['calle'])}, el camino es más llano."
-            return {"tipo": "cuesta", "tramo_id": int(i), "mensaje": self._saludo(perfil, texto),
-                    "sugerencia": alt,
-                    "motivo": {"pendiente_pct": round(pend, 1), "umbral_perfil_pct": umbral,
-                               "metros_hasta_cuesta": round(distancia_hasta)},
-                    "fuentes": [FUENTES_DATOS["pendiente"]]}
-        return None
+                camino = self._seguir(idx, hacia, max(presupuesto, 60))
+            nivel = self._peor(cl, camino)
+            if nivel == "barrera" or orden[nivel] >= orden[nivel_actual]:
+                continue
+            clave = (orden[nivel], extra or 0, abs(dif))
+            if mejor is None or clave < mejor[0]:
+                mejor = (clave, {"direccion": _palabra_giro(dif), "calle": _calle(self.calles.at[idx, "nombre"]),
+                                 "tramo_id": int(idx), "coordenadas": [self._a_latlon(self.xy[otro])],
+                                 "categoria": CATEGORIA[nivel], "extra_m": extra})
+        return mejor[1] if mejor else None
+
+    def _motivos_nuevos(self, i, cl, ctx):
+        """Motivos de un tramo de los que aún no se ha avisado: nunca dos veces del mismo tramo, y de cada
+        motivo no antes de ESPERA_MOTIVO metros desde el último aviso (una cuesta larga es un solo aviso)."""
+        if int(i) in ctx["tramos_avisados"]:
+            return []
+        out = []
+        for m in self.motivos(i, cl, int(ctx["mes"])):
+            ultimo = ctx["avisos_dados"].get("motivo:" + m["clave"], -10 ** 9)
+            if m["clave"] == "cuesta":                   # tras avisar de una cuesta fuerte, una suave no es noticia
+                ultimo = max(ultimo, ctx["avisos_dados"].get("motivo:cuesta_fuerte", -10 ** 9))
+            if ctx["metros_andados"] - ultimo >= ESPERA_MOTIVO[m["clave"]]:
+                out.append(m)
+        return out
+
+    def _r_por_delante(self, perfil, ctx, idx, hacia, falta, ramas, previsto, presupuesto):
+        """Lo que viene por delante (por la calle, o por la ruta si va a un destino) que para ESTA persona
+        es una barrera (rojo: tono de alerta) o una incomodidad (amarillo: tono tranquilo), con una
+        alternativa mejor si la hay. Sustituye a los antiguos avisos de escaleras, cuesta, polen y zonas."""
+        cl = self._paso.cl
+        # Ya dentro de una barrera (p. ej. una cuesta fuerte): ánimo y cuánto queda
+        aqui = [m for m in self._motivos_nuevos(idx, cl, ctx) if m["nivel"] == "barrera"]
+        if aqui and falta >= 40:
+            texto = (f"Estás en una calle donde {_lista([m['texto'] for m in aqui])}. "
+                     f"Quedan unos {falta:.0f} m hasta el cruce; ve con calma.")
+            return self._aviso_tramo("barrera", perfil, texto, aqui, [idx], 0, None)
+
+        objetivo, dist = None, falta
+        for j, i in enumerate(previsto[1:], start=1):
+            if j > 1:
+                dist += float(self.calles.at[previsto[j - 1], "length"])
+            mot = self._motivos_nuevos(i, cl, ctx)
+            if not mot:
+                continue
+            nivel = "barrera" if any(m["nivel"] == "barrera" for m in mot) else "incomodidad"
+            if objetivo is None or (nivel == "barrera" and objetivo[1] != "barrera"):
+                objetivo = (j, nivel, i, dist, mot)
+            if nivel == "barrera":
+                break
+        if objetivo is None:
+            return None
+        j, nivel, i, d, mot = objetivo
+        if nivel == "barrera":
+            mot = [m for m in mot if m["nivel"] == "barrera"]
+        factores = {m["factor"] for m in mot}
+        tramos = [i]                                     # los tramos seguidos con lo mismo, de una vez
+        for k in previsto[j + 1:]:
+            if factores & {m["factor"] for m in self.motivos(k, cl, int(ctx["mes"]))}:
+                tramos.append(k)
+            else:
+                break
+        alt = self._mejor_salida(ramas, hacia, presupuesto, cl, nivel)
+        calle = _calle(self.calles.at[i, "nombre"])
+        en = f", en {calle}," if calle else ""
+        que = _lista([m["texto"] for m in mot[:2]])
+        cuando = "justo aquí delante" if d < 25 else f"en unos {d:.0f} m"
+        if nivel == "barrera":
+            texto = f"Atención: {cuando}{en} {que}."
+            if alt:
+                texto += f" Mejor sigue {alt['direccion']}{_por(alt['calle'])}{self._cuanto_mas(alt)}."
+            else:
+                texto += " Ve con calma." if "cuesta" in factores else " Si puedes, busca otro camino."
+        else:
+            texto = f"Más adelante{en} {que}."
+            if alt:
+                texto += f" Si prefieres, {alt['direccion']}{_por(alt['calle'])} está mejor{self._cuanto_mas(alt)}."
+        return self._aviso_tramo(nivel, perfil, texto, mot, tramos, d, alt)
+
+    def _aviso_tramo(self, nivel, perfil, texto, mot, tramos, metros, alt):
+        return {"tipo": nivel, "nivel": nivel, "factor": mot[0]["factor"], "tramo_id": int(tramos[0]),
+                "tramos": [int(t) for t in tramos], "mensaje": self._saludo(perfil, texto), "sugerencia": alt,
+                "motivo": {"factores": mot, "metros_hasta": round(metros),
+                           "umbrales": self._paso.cl.attrs["umbrales"]},
+                "fuentes": self._fuentes_de(mot)}
 
     def _distancia_comoda(self, perfil):
         if "mucho" in (perfil.cuestas, perfil.descanso):
@@ -876,7 +877,9 @@ class Acompanante:
         else:
             texto = f"Llevas ya unos {ctx['metros_andados'] / 1000:.1f} km andados."
         texto += (f" Tienes la parada de {t['tipo']} {t['nombre']} a unos {t['distancia_m']} m"
-                  " por si prefieres volver en transporte. Si quieres que te lleve de vuelta, dime «quiero volver».")
+                  " por si prefieres volver en transporte.")
+        if (ctx.get("destino") or {}).get("tipo") != "casa":
+            texto += " Si quieres que te lleve de vuelta, dime «quiero volver»."
         return {"tipo": "cansancio", "mensaje": self._saludo(perfil, texto),
                 "sugerencia": {"recurso": t},
                 "motivo": {"metros_andados": round(ctx["metros_andados"]), "distancia_comoda_perfil": limite,
@@ -899,42 +902,6 @@ class Acompanante:
         return {"tipo": "descanso", "mensaje": self._saludo(perfil, texto), "sugerencia": {"recurso": b},
                 "motivo": {"metros_sin_banco": round(ctx["metros_sin_banco"]), "umbral_perfil_m": round(umbral)},
                 "fuentes": [FUENTES_DATOS["bancos"]]}
-
-    def _r_polen(self, perfil, ctx, idx, hacia, falta, ramas, previsto, presupuesto):
-        if not getattr(perfil, "sensible_polen", False):
-            return None
-        mes = int(ctx["mes"])
-        delante = previsto[1:] or previsto
-        total, detalle = self._polen_activo(delante, mes)
-        if total < 5 or any(int(i) in ctx["tramos_avisados"] for i in delante[:1]):
-            return None
-        tipo, (n, nivel) = max(detalle.items(), key=lambda kv: kv[1][0])
-        alt = self._alternativa(ramas, hacia, presupuesto,
-                                lambda t: self._polen_activo([t], mes)[0] >= 3)
-        texto = (f"Por delante hay unos {total} árboles cuyo polen suele estar {nivel} en {MESES[mes - 1]} "
-                 f"(sobre todo {tipo.lower()}).")
-        if alt:
-            texto += f" Si sigues {alt['direccion']}{_por(alt['calle'])} hay menos."
-        return {"tipo": "polen", "tramo_id": int(delante[0]), "mensaje": self._saludo(perfil, texto),
-                "sugerencia": alt,
-                "motivo": {"arboles_con_polen_activo": total, "detalle": {k: v[0] for k, v in detalle.items()},
-                           "mes": mes, "nota": "patrón estacional histórico, no el polen de hoy"},
-                "fuentes": [FUENTES_DATOS["arbolado"], FUENTES_DATOS["polen"]]}
-
-    def _r_alejarse(self, perfil, ctx, idx, hacia, falta, ramas, previsto, presupuesto):
-        if perfil.transporte == "nada" and not perfil.cansado:
-            return None
-        ahora = float(self.calles.at[idx, "dist_transporte"])
-        delante = max(float(self.calles.at[i, "dist_transporte"]) for i in previsto)
-        if ahora <= 250 and delante >= 350:
-            lat, lon = self._a_latlon(self._punto_actual(idx, hacia, falta))
-            t = self.m.mas_cercano(lat, lon, "transporte")
-            texto = (f"Si sigues recto, el transporte público queda más lejos (hasta {delante:.0f} m andando). "
-                     f"Ahora tienes {t['tipo']} {t['nombre']} a {t['distancia_m']} m.")
-            return {"tipo": "alejarse", "mensaje": self._saludo(perfil, texto), "sugerencia": {"recurso": t},
-                    "motivo": {"dist_transporte_ahora_m": round(ahora), "dist_transporte_delante_m": round(delante)},
-                    "fuentes": [FUENTES_DATOS["transporte"]]}
-        return None
 
     def _r_agua(self, perfil, ctx, idx, hacia, falta, ramas, previsto, presupuesto):
         calor_dicho = "calor" in ctx.get("estados", [])
@@ -1006,17 +973,159 @@ class Acompanante:
         c = _coords_desde(geom, self.xy[hacia])
         return LineString(c).interpolate(falta).coords[0]
 
-    # ------------------------------------------------------------ volver
+    # ------------------------------------------------------------ ir a un sitio (modo destino)
+    def ir_a(self, lat, lon, perfil, contexto, destino):
+        """Empieza a guiar hacia `destino` ({lat, lon, nombre, tipo}): ruta MÁS CORTA andando, descrita
+        para esta persona. Devuelve el contexto con el destino: los pasos siguientes la recalculan."""
+        ctx = dict(contexto or {})
+        perfil = self.perfil_efectivo(perfil, self.estados(perfil, ctx))
+        resultado = self.m.ruta((lat, lon), (destino["lat"], destino["lon"]), perfil)
+        ctx["destino"] = {"lat": float(destino["lat"]), "lon": float(destino["lon"]),
+                          "nombre": destino.get("nombre"), "tipo": destino.get("tipo")}
+        ctx.setdefault("casa", {"lat": lat, "lon": lon})
+        resultado["contexto"] = ctx
+        return resultado
+
     def volver(self, lat, lon, perfil, contexto=None):
-        """Ruta adaptada de vuelta a casa (punto de inicio). Si casa queda lejos (>1,5 km)
+        """«Quiero volver»: modo destino hacia el punto de inicio del paseo. Si queda lejos (>1,5 km)
         o la persona está cansada, ofrece también el transporte más cercano."""
         ctx = contexto or {}
         casa = ctx.get("casa") or {"lat": lat, "lon": lon}
-        perfil_vuelta = perfil
-        resultado = self.m.recomendar_ruta((lat, lon), (casa["lat"], casa["lon"]), perfil_vuelta)
+        resultado = self.ir_a(lat, lon, perfil, ctx, {"lat": casa["lat"], "lon": casa["lon"],
+                                                      "nombre": "el punto de inicio", "tipo": "casa"})
+        perfil = self.perfil_efectivo(perfil, self.estados(perfil, ctx))
         t = self.m.mas_cercano(lat, lon, "transporte")
         resultado["alternativa_transporte"] = t
-        if resultado["ruta_recomendada"]["longitud_m"] > 1500 or perfil.cansado:
+        if resultado["ruta"]["longitud_m"] > 1500 or perfil.cansado:
             resultado["explicacion"] += (f" Si prefieres no andar tanto, la parada de {t['tipo']} "
                                          f"{t['nombre']} está a {t['distancia_m']} m.")
         return resultado
+
+    # ------------------------------------------------------------ navegación hacia el destino
+    def _otro(self, idx, nodo):
+        u, v = int(self.calles.at[idx, "u"]), int(self.calles.at[idx, "v"])
+        return v if u == int(nodo) else u
+
+    def _camino_hasta(self, nodo, dnodo, dist):
+        """Tramos del camino más corto de `nodo` a `dnodo` usando la tabla de distancias al destino."""
+        camino, n = [], nodo
+        for _ in range(3000):
+            if n == dnodo:
+                break
+            opciones = self.vecinos.get(n, [])
+            if not opciones:
+                break
+            idx, otro = min(opciones, key=lambda t: float(self.calles.at[t[0], "length"]) + dist.get(t[1], math.inf))
+            if math.isinf(dist.get(otro, math.inf)):
+                break
+            camino.append(idx)
+            n = otro
+        return camino
+
+    def _recortar(self, camino, metros):
+        """Primeros tramos de un camino hasta cubrir `metros`."""
+        out, acum = [], 0.0
+        for i in camino:
+            if acum >= metros:
+                break
+            out.append(i)
+            acum += float(self.calles.at[i, "length"])
+        return out
+
+    def _extra(self, idx, otro, hacia):
+        """Metros que añade salir del cruce `hacia` por `idx` en vez de por la ruta. None si no compensa."""
+        nav = getattr(self._paso, "nav", None)
+        if not nav:
+            return None
+        base = nav["dist"].get(int(hacia), math.inf)
+        extra = float(self.calles.at[idx, "length"]) + nav["dist"].get(int(otro), math.inf) - base
+        if math.isinf(extra) or extra > max(150.0, 0.5 * nav["restante"]):
+            return None
+        return int(round(max(extra, 0.0)))
+
+    @staticmethod
+    def _cuanto_mas(alt):
+        if not alt or alt.get("extra_m") is None:
+            return ""
+        return " (misma distancia)" if alt["extra_m"] < 15 else f" (son unos {alt['extra_m']} m más)"
+
+    def _navegar(self, p, idx, hacia, desde, falta, rumbo, dest):
+        """Ruta más corta desde la posición ACTUAL al destino: metros que faltan, línea para el mapa,
+        próxima indicación y si ha llegado. Recalcular en cada paso hace que, si se desvía, la ruta
+        se adapte sola."""
+        try:
+            dnodo = self.m._nodo_cercano(dest["lat"], dest["lon"])
+        except ValueError:
+            return None
+        dist = self.m.distancias_a(dnodo)
+        geom = self.calles.at[idx, "geometry"]
+        largo = float(geom.length)
+        p_dest = self._a_metros(dest["lat"], dest["lon"])
+        acceso = Point(self.xy[dnodo]).distance(p_dest)
+        via_h = falta + dist.get(int(hacia), math.inf)
+        via_d = (largo - falta) + dist.get(int(desde), math.inf)
+        if math.isinf(min(via_h, via_d)):
+            return None
+        directo = p.distance(p_dest)
+        nombre = dest.get("nombre") or "el destino"
+        if directo <= 25:
+            return {"nombre": nombre, "tipo": dest.get("tipo"), "llegado": True, "metros_restantes": 0,
+                    "minutos": 0, "coordenadas": [], "indicacion": None}
+        dar_vuelta = via_d < via_h
+        nodo = desde if dar_vuelta else hacia
+        camino = self._camino_hasta(nodo, dnodo, dist)
+        restante = min(via_h, via_d) + acceso
+
+        # Línea que queda: de la persona al cruce, la ruta y el último trozo hasta el destino
+        s_p = geom.project(p)
+        c = list(geom.coords)
+        nodo_al_final = Point(c[-1]).distance(Point(self.xy[nodo])) <= Point(c[0]).distance(Point(self.xy[nodo]))
+        tramo = substring(geom, s_p, largo) if nodo_al_final else substring(geom, 0, s_p)
+        pts = list(tramo.coords) if nodo_al_final else list(tramo.coords)[::-1]
+        if len(pts) < 2:
+            pts = [(p.x, p.y), self.xy[nodo]]
+        n = nodo
+        for t in camino:
+            pts += _coords_desde(self.calles.at[t, "geometry"], self.xy[n])[1:]
+            n = self._otro(t, n)
+        pts.append((p_dest.x, p_dest.y))
+        linea = gpd.GeoSeries([LineString(pts)], crs=CRS_M).to_crs(4326).iloc[0]
+        coords = [[round(y, 6), round(x, 6)] for x, y in linea.coords]
+
+        return {"nombre": nombre, "tipo": dest.get("tipo"), "llegado": directo <= 25 or restante <= 25,
+                "metros_restantes": int(round(restante)), "minutos": max(1, round(restante / 50)),
+                "coordenadas": [coords],
+                "indicacion": self._indicacion(camino, nodo, falta if not dar_vuelta else largo - falta,
+                                               rumbo, dar_vuelta, restante, nombre),
+                "_interno": {"camino": camino, "dist": dist, "dnodo": dnodo, "restante": restante,
+                             "dar_vuelta": dar_vuelta}}
+
+    def _indicacion(self, camino, nodo, hasta_cruce, rumbo, dar_vuelta, restante, nombre):
+        """Próxima indicación, como un navegador: el primer giro de verdad de la ruta."""
+        if dar_vuelta:
+            return "Da la vuelta: el camino sigue en la otra dirección."
+        if rumbo is None or not camino:
+            calle = _calle(self.calles.at[camino[0], "nombre"]) if camino else None
+            return f"Ve{_por(calle) or ' hacia ' + nombre}." if calle else f"Sigue hasta {nombre}, a unos {restante:.0f} m."
+        acum, n, r_in = hasta_cruce, nodo, rumbo
+        for t in camino:
+            c = _coords_desde(self.calles.at[t, "geometry"], self.xy[n])
+            linea = LineString(c)
+            dif = _giro(r_in, _rumbo(c[0], linea.interpolate(min(10, linea.length)).coords[0]))
+            if abs(dif) >= 35:
+                calle = _calle(self.calles.at[t, "nombre"])
+                if acum < 15:
+                    return f"Ahora, gira {_palabra_giro(dif)}{_por(calle)}."
+                return f"En unos {acum:.0f} m, gira {_palabra_giro(dif)}{_por(calle)}."
+            acum += float(linea.length)
+            r_in = _rumbo(linea.interpolate(max(linea.length - 10, 0)).coords[0], c[-1])
+            n = self._otro(t, n)
+        return f"Sigue recto unos {restante:.0f} m hasta {nombre}."
+
+    def _r_llegada(self, perfil, dest):
+        if dest.get("tipo") == "casa":
+            texto = "Ya estás de vuelta en el punto donde empezaste el paseo."
+        else:
+            texto = f"Has llegado: {dest.get('nombre') or 'tu destino'} está aquí mismo."
+        return {"tipo": "llegada", "mensaje": self._saludo(perfil, texto), "sugerencia": None,
+                "motivo": {"destino": dest.get("nombre")}, "fuentes": []}

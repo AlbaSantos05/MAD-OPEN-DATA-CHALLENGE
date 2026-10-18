@@ -77,11 +77,12 @@ def simular(acomp, perfil, puntos, mes, hora, cansada_en=None, dice=None, verbos
                        lat_antes=antes[0] if antes else None, lon_antes=antes[1] if antes else None)
         ctx, antes = r["contexto"], (lat, lon)
         if r["aviso"]:
-            avisos.append((ctx["metros_andados"], r["aviso"]["tipo"], r["aviso"]["mensaje"]))
+            tipo = r["aviso"]["tipo"] + (f":{r['aviso']['factor']}" if r["aviso"].get("factor") else "")
+            avisos.append((ctx["metros_andados"], tipo, r["aviso"]["mensaje"]))
             if verbose:
                 z = r["zona"]
                 print(f"   [{ctx['metros_andados']:>5.0f} m] {r['posicion']['calle'] or '':<30.30} "
-                      f"zona {z['idoneidad_aqui']:>3} {r['aviso']['tipo'].upper():<12} {r['aviso']['mensaje']}")
+                      f"{z['categoria_aqui']:<8} {tipo.upper():<22} {r['aviso']['mensaje']}")
     return avisos, ctx
 
 
