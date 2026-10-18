@@ -66,17 +66,6 @@ CREATE TABLE tramos (
 );
 CREATE INDEX tramos_nodos_ix ON tramos (nodo_u, nodo_v);
 
--- ---------------------------------------------------------------------
--- Datos ambientales de la Comunidad, ya resumidos por Python (se rellenan el sábado)
--- ---------------------------------------------------------------------
-CREATE TABLE clima_mes_hora (
-  estacion_id VARCHAR2(20),
-  mes         NUMBER(2) CONSTRAINT clima_mes_ck CHECK (mes BETWEEN 1 AND 12),
-  hora        NUMBER(2) CONSTRAINT clima_hora_ck CHECK (hora BETWEEN 0 AND 23),
-  temp_media  NUMBER(4,1),
-  n_medidas   NUMBER,
-  CONSTRAINT clima_pk PRIMARY KEY (estacion_id, mes, hora)
-);
 
 CREATE TABLE polen_mes (
   tipo_polen  VARCHAR2(60),
