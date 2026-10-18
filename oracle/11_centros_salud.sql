@@ -1,8 +1,9 @@
 -- =====================================================================
--- 11 · Centros de salud de la Comunidad de Madrid (Chamberí y 500 m alrededor)
--- Ejecutar como MADDATA (APEX › SQL Workshop › SQL Scripts). Se puede repetir:
--- crea la tabla si no existe y vuelve a cargar las filas.
--- Datos generados por pipelines/centros_salud.py a partir de data/raw/centros_salud.geojson.
+-- 11 · Centros de salud de la Comunidad de Madrid (zona del prototipo y 500 m alrededor)
+-- Ejecutar como MADDATA (APEX › SQL Workshop › SQL Scripts). Se puede repetir.
+-- SOLO estructura: tabla, fuente, diccionario y API. Sin datos escritos a mano.
+-- Los datos los genera pipelines/centros_salud.py (para la zona que cubra el dataset)
+-- y los carga pipelines/cargar_ambiental.py, igual que el polen y el aire.
 --
 --   GET .../dataset/centros_salud/          -> lista (JSON)
 --   GET .../dataset/centros_salud.geojson   -> para el mapa
@@ -20,11 +21,22 @@ BEGIN
       tipo_centro VARCHAR2(60),
       direccion   VARCHAR2(200),
       url         VARCHAR2(300),
-      lat         NUMBER(9,6)   NOT NULL CONSTRAINT cs_lat_ck CHECK (lat BETWEEN 40 AND 41),
-      lon         NUMBER(9,6)   NOT NULL CONSTRAINT cs_lon_ck CHECK (lon BETWEEN -4 AND -3)
+      lat         NUMBER(9,6)   NOT NULL CONSTRAINT cs_lat_ck CHECK (lat BETWEEN 39.8 AND 41.2),
+      lon         NUMBER(9,6)   NOT NULL CONSTRAINT cs_lon_ck CHECK (lon BETWEEN -4.6 AND -3.0)
     )]';
 EXCEPTION
   WHEN ya_existe THEN NULL;
+END;
+/
+
+-- Rango de coordenadas = toda la Comunidad de Madrid (la primera versión lo limitaba a la capital)
+BEGIN
+  FOR c IN (SELECT constraint_name FROM user_constraints
+            WHERE table_name = 'CENTROS_SALUD' AND constraint_name IN ('CS_LAT_CK', 'CS_LON_CK')) LOOP
+    EXECUTE IMMEDIATE 'ALTER TABLE centros_salud DROP CONSTRAINT ' || c.constraint_name;
+  END LOOP;
+  EXECUTE IMMEDIATE 'ALTER TABLE centros_salud ADD CONSTRAINT cs_lat_ck CHECK (lat BETWEEN 39.8 AND 41.2)';
+  EXECUTE IMMEDIATE 'ALTER TABLE centros_salud ADD CONSTRAINT cs_lon_ck CHECK (lon BETWEEN -4.6 AND -3.0)';
 END;
 /
 
@@ -32,27 +44,15 @@ END;
 MERGE INTO fuentes f
 USING (SELECT 'CM_CENTROS_SALUD' AS fuente_id FROM dual) s
 ON (f.fuente_id = s.fuente_id)
+WHEN MATCHED THEN UPDATE SET
+  uso_en_proyecto = 'Centro de salud más cercano (botón y avisos del acompañante, por ejemplo ante un mareo). Tabla CENTROS_SALUD: centros a menos de 500 m de la red peatonal del dataset, descargados de la IDEM con el rectángulo de esa red (pipelines/centros_salud.py).',
+  limitaciones    = 'Sin horarios ni servicio de urgencias. El filtro de 500 m es en línea recta. Un centro de salud no sustituye al 112 en una urgencia.'
 WHEN NOT MATCHED THEN INSERT VALUES (
   'CM_CENTROS_SALUD', 'Centros de Salud (IDEM, Infraestructura de Datos Espaciales de la Comunidad de Madrid)', 'CM',
   'idem.comunidad.madrid', 'https://idem.comunidad.madrid/ags/rest/services/Hosted/Centros_de_Salud/FeatureServer/0',
   'Ver condiciones del portal', 'GeoJSON (servicio ArcGIS REST)', DATE '2026-10-18',
-  'Centro de salud más cercano (botón y avisos del acompañante, por ejemplo ante un mareo). Tabla CENTROS_SALUD: 10 centros a menos de 500 m de la red peatonal del prototipo.',
+  'Centro de salud más cercano (botón y avisos del acompañante, por ejemplo ante un mareo). Tabla CENTROS_SALUD: centros a menos de 500 m de la red peatonal del dataset, descargados de la IDEM con el rectángulo de esa red (pipelines/centros_salud.py).',
   'Sin horarios ni servicio de urgencias. El filtro de 500 m es en línea recta. Un centro de salud no sustituye al 112 en una urgencia.');
-
--- ---------------------------------------------------------------- datos
-DELETE FROM centros_salud;
-INSERT INTO centros_salud (centro_id, nombre, tipo_centro, direccion, url, lat, lon) VALUES ('CS_85', 'Centro de salud Andrés Mellado', 'centro de salud', 'Calle Andrés Mellado 37', 'https://www.comunidad.madrid/centros/centro-salud-andres-mellado', 40.434416, -3.714518);
-INSERT INTO centros_salud (centro_id, nombre, tipo_centro, direccion, url, lat, lon) VALUES ('CS_88', 'Centro de salud Argüelles', 'centro de salud', 'Calle Quintana 11', 'https://www.comunidad.madrid/centros/centro-salud-arguelles', 40.427804, -3.717265);
-INSERT INTO centros_salud (centro_id, nombre, tipo_centro, direccion, url, lat, lon) VALUES ('CS_107', 'Centro de salud Cea Bermúdez', 'centro de salud', 'Calle Cea Bermúdez 10', 'https://www.comunidad.madrid/centros/centro-salud-cea-bermudez', 40.438947, -3.707137);
-INSERT INTO centros_salud (centro_id, nombre, tipo_centro, direccion, url, lat, lon) VALUES ('CS_118', 'Centro de salud Eloy Gonzalo', 'centro de salud', 'Calle Eloy Gonzalo 24', 'https://www.comunidad.madrid/centros/centro-salud-eloy-gonzalo', 40.434182, -3.701228);
-INSERT INTO centros_salud (centro_id, nombre, tipo_centro, direccion, url, lat, lon) VALUES ('CS_122', 'Centro de salud Espronceda', 'centro de salud', 'Calle Espronceda 24', 'https://www.comunidad.madrid/centros/centro-salud-espronceda', 40.440515, -3.696683);
-INSERT INTO centros_salud (centro_id, nombre, tipo_centro, direccion, url, lat, lon) VALUES ('CS_133', 'Centro de salud Guzmán el Bueno', 'centro de salud', 'Calle Guzmán El Bueno 11', 'https://www.comunidad.madrid/centros/centro-salud-guzman-bueno', 40.431268, -3.713588);
-INSERT INTO centros_salud (centro_id, nombre, tipo_centro, direccion, url, lat, lon) VALUES ('CS_141', 'Centro de salud Justicia', 'centro de salud', 'Calle Regueros 3', 'https://www.comunidad.madrid/centros/centro-salud-justicia', 40.424461, -3.696777);
-INSERT INTO centros_salud (centro_id, nombre, tipo_centro, direccion, url, lat, lon) VALUES ('CS_143', 'Centro de salud Lagasca', 'centro de salud', 'Calle Lagasca 122', 'https://www.comunidad.madrid/centros/centro-salud-lagasca', 40.435608, -3.684206);
-INSERT INTO centros_salud (centro_id, nombre, tipo_centro, direccion, url, lat, lon) VALUES ('CS_171', 'Centro de salud Palma Norte', 'centro de salud', 'Calle Palma c/v Norte 59', 'https://www.comunidad.madrid/centros/centro-salud-palma-norte', 40.426631, -3.707362);
-INSERT INTO centros_salud (centro_id, nombre, tipo_centro, direccion, url, lat, lon) VALUES ('CS_185', 'Centro de salud Reina Victoria', 'centro de salud', 'Avenida Reina Victoria 21', 'https://www.comunidad.madrid/centros/centro-salud-reina-victoria', 40.446846, -3.707527);
-INSERT INTO cargas (tabla, filas, origen) VALUES ('CENTROS_SALUD', 10, 'data/processed/centros_salud.csv (vía oracle/11_centros_salud.sql)');
-COMMIT;
 
 -- ---------------------------------------------------------------- diccionario
 MERGE INTO diccionario d
@@ -98,5 +98,5 @@ BEGIN
 END;
 /
 
--- Comprobación: debe dar 10
+-- Comprobación: la tabla existe (0 filas hasta ejecutar pipelines/cargar_ambiental.py)
 SELECT COUNT(*) FROM centros_salud;
