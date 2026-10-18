@@ -1,0 +1,44 @@
+{
+  "distrito": "Chamberí",
+  "celda_m": 200,
+  "zonas": 135,
+  "km_red": 199.1,
+  "puntuacion_media": 88.2,
+  "puntuacion_min": 36.8,
+  "puntuacion_max": 100.0,
+  "pct_red_distrito": {
+    "descanso": 90.8,
+    "transporte": 97.2,
+    "farmacia": 90.3,
+    "centro_salud": 72.3,
+    "llano": 91.6,
+    "agua": 78.4,
+    "sin_escaleras": 99.0
+  },
+  "pesos": {
+    "descanso": 0.25,
+    "transporte": 0.15,
+    "farmacia": 0.15,
+    "centro_salud": 0.15,
+    "llano": 0.15,
+    "agua": 0.1,
+    "sin_escaleras": 0.05
+  },
+  "umbrales": {
+    "banco_m": 100,
+    "transporte_m": 300,
+    "farmacia_m": 300,
+    "agua_m": 300,
+    "centro_salud_m": 500,
+    "pendiente_pct": 6
+  },
+  "punto_debil_mas_frecuente": {
+    "ninguno destacable": 46,
+    "centro de salud lejos": 45,
+    "fuentes lejos": 21,
+    "pocos bancos cerca": 8,
+    "farmacia lejos": 7,
+    "cuestas": 7,
+    "escaleras": 1
+  }
+}
