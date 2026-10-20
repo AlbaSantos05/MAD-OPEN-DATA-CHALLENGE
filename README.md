@@ -7,7 +7,7 @@ MADcompaña acompaña a una persona mayor mientras pasea por Madrid. No es un ma
 Todo se construye con **datos abiertos** de la Comunidad de Madrid, el Ayuntamiento, el CRTM y OpenStreetMap, integrados en un **dataset propio** de la red peatonal. El prototipo cubre **Chamberí**, pero el código no está atado al distrito: basta con regenerar el dataset para otra zona.
 
 > **Demo**
-> - Interfaz (Oracle APEX): _enlace pendiente_
+> - Interfaz (Oracle APEX): https://g65cd3d29f3f6ee-madcompanadb.adb.eu-madrid-1.oraclecloudapps.com/ords/r/maddata/acompa%C3%B1ante-urbano-chamber%C3%AD/asistente-urbano
 > - API (FastAPI en Render): _URL pendiente_ · documentación interactiva en `/docs`
 > - API de datos (Oracle ORDS, solo lectura): `https://g65cd3d29f3f6ee-madcompanadb.adb.eu-madrid-1.oraclecloudapps.com/ords/maddata/dataset/`
 
